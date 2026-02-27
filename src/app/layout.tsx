@@ -17,21 +17,6 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "消耗多余拼豆豆豆",
   description: "选择多余的豆子颜色，AI生成拼豆图纸，或输入描述/上传参考图生成拼豆图纸",
-  manifest: "/manifest.json",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "default",
-    title: "消耗多余拼豆豆豆",
-  },
-  icons: {
-    icon: [
-      { url: "/icon-192x192.png", sizes: "192x192", type: "image/png" },
-      { url: "/icon-512x512.png", sizes: "512x512", type: "image/png" },
-    ],
-    apple: [
-      { url: "/icon-192x192.png", sizes: "192x192", type: "image/png" },
-    ],
-  },
 };
 
 export const viewport: Viewport = {
