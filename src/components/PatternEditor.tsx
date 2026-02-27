@@ -263,7 +263,7 @@ const PatternEditor: React.FC<PatternEditorProps> = ({
   const currentColors = React.useMemo(() => {
     if (!colorCounts) return [];
     return Object.entries(colorCounts).map(([hex, data]) => ({
-      key: getColorKeyByHex(hex, colorSystem, activePalette) || hex,
+      key: getColorKeyByHex(hex, colorSystem) || hex,
       color: hex
     }));
   }, [colorCounts, colorSystem, activePalette]);
@@ -271,7 +271,7 @@ const PatternEditor: React.FC<PatternEditorProps> = ({
   // 获取余色色板（用户在前一页选择的所有颜色，即activePalette）
   const remainingColors = React.useMemo(() => {
     return activePalette.map(p => ({
-      key: getColorKeyByHex(p.hex, colorSystem, activePalette) || p.key,
+      key: getColorKeyByHex(p.hex, colorSystem) || p.key,
       color: p.hex
     }));
   }, [activePalette, colorSystem]);
@@ -284,7 +284,7 @@ const PatternEditor: React.FC<PatternEditorProps> = ({
         const rgb = hexToRgb(hex);
         if (!rgb) return null;
         // 根据当前色号系统获取对应的key
-        const colorKey = getColorKeyByHex(hex, colorSystem, activePalette) || mardKey;
+        const colorKey = getColorKeyByHex(hex, colorSystem) || mardKey;
         return { key: colorKey, color: hex };
       })
       .filter((color): color is { key: string; color: string } => color !== null);
@@ -367,7 +367,7 @@ const PatternEditor: React.FC<PatternEditorProps> = ({
       console.log('Eyedropper: picking color from canvas:', { key: cell.key, color: cell.color });
       if (!cell.isExternal && cell.key) {
         // 获取颜色对应的key
-        const colorKey = getColorKeyByHex(cell.color, colorSystem, activePalette) || cell.key;
+        const colorKey = getColorKeyByHex(cell.color, colorSystem) || cell.key;
         editingState.selectColor({ key: colorKey, color: cell.color });
         // 取色后自动关闭取色笔模式
         editingState.setIsEyedropperMode(false);
