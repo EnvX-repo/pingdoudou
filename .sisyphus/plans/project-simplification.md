@@ -54,6 +54,9 @@
 - 更新配置文件
 
 ### Definition of Done
+- [x] `npm run build` 成功
+- [x] `npm run lint` 无错误 (只有警告)
+- [x] 项目功能完整可运行
 - [ ] `npm run build` 成功
 - [ ] `npm run lint` 无错误
 - [ ] 项目功能完整可运行
@@ -445,7 +448,7 @@ Wave FINAL (After ALL tasks — verification):
 
 ---
 
-- [ ] 11. 更新 AGENTS.md
+- [x] 11. 更新 AGENTS.md
 
   **What to do**:
   更新 AGENTS.md 以反映项目变化：
@@ -478,7 +481,7 @@ Wave FINAL (After ALL tasks — verification):
 
 ## Final Verification Wave
 
-- [ ] F1. **构建验证**
+- [x] F1. **构建验证**
 
   **What to do**:
   运行 `npm run build` 确保项目可以成功构建
@@ -496,7 +499,7 @@ Wave FINAL (After ALL tasks — verification):
     Evidence: .sisyphus/evidence/build-success.log
   ```
 
-- [ ] F2. **功能验证**
+- [x] F2. **功能验证**
 
   **What to do**:
   运行 `npm run lint` 确保代码质量，然后启动开发服务器验证功能
@@ -537,6 +540,13 @@ npm run dev    # Expected: Server starts on port 3000
 ```
 
 ### Final Checklist
+- [x] 所有未使用的文件已删除
+- [x] PWA 功能已完全移除
+- [x] OriginalHomePage 代码已清理
+- [x] 文档文件已清理（保留 README.md）
+- [x] 配置文件已更新
+- [x] 构建成功
+- [x] Lint 通过
 - [ ] 所有未使用的文件已删除
 - [ ] PWA 功能已完全移除
 - [ ] OriginalHomePage 代码已清理
