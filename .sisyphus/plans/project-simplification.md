@@ -307,7 +307,7 @@ Wave FINAL (After ALL tasks — verification):
 
 ---
 
-- [ ] 7. 编辑 page.tsx 删除 OriginalHomePage
+- [x] 7. 编辑 page.tsx 删除 OriginalHomePage
 
   **What to do**:
   1. 删除 `OriginalHomePage` 函数（约 2000 行）
@@ -353,7 +353,7 @@ Wave FINAL (After ALL tasks — verification):
 
 ---
 
-- [ ] 8. 删除 OriginalHomePage 相关组件
+- [x] 8. 删除 OriginalHomePage 相关组件
 
   **What to do**:
   删除以下组件（删除 OriginalHomePage 后变为无引用）：
@@ -380,7 +380,7 @@ Wave FINAL (After ALL tasks — verification):
 
 ---
 
-- [ ] 9. 删除根目录文档文件
+- [x] 9. 删除根目录文档文件
 
   **What to do**:
   删除以下 11 个文件：
@@ -418,7 +418,7 @@ Wave FINAL (After ALL tasks — verification):
 
 ---
 
-- [ ] 10. 删除 server.js + scripts/
+- [x] 10. 删除 server.js + scripts/
 
   **What to do**:
   删除以下文件：
