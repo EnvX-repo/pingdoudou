@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProxyAgent } from '../../../utils/proxy';
+import { getEnv } from '../../../utils/hotEnv';
 
 /**
  * 把用户输入的简称/昵称/中文名「解释」成清晰的英文描述，方便后续画图。
@@ -15,7 +16,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '缺少 query 参数' }, { status: 400 });
     }
 
-    const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+    const apiKey = getEnv('GOOGLE_API_KEY') || getEnv('GEMINI_API_KEY');
     if (!apiKey) {
       return NextResponse.json(
         { error: '未配置 GOOGLE_API_KEY，无法使用「解释再画」' },
@@ -23,8 +24,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const model = process.env.GEMINI_TEXT_MODEL || 'gemini-2.0-flash-exp';
-    const baseUrl = process.env.GOOGLE_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
+    const model = getEnv('GEMINI_TEXT_MODEL') || 'gemini-2.0-flash-exp';
+    const baseUrl = getEnv('GOOGLE_API_BASE_URL') || 'https://generativelanguage.googleapis.com/v1beta';
     const endpoint = `${baseUrl.replace(/\/$/, '')}/models/${model}:generateContent?key=${apiKey}`;
 
     const systemPrompt = `You are a helper for a perler bead (拼豆) image generator. The user will send a short phrase: a nickname, a Chinese name, series name + character name, or a casual term for a character, animal, or object. 

@@ -1,21 +1,22 @@
 import { NextResponse } from 'next/server';
+import { getEnv } from '../../../utils/hotEnv';
 
 // 检查API配置状态（不暴露敏感信息）
 export async function GET() {
-  const googleApiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-  const apiKey = googleApiKey || process.env.AZURE_OPENAI_API_KEY || process.env.OPENAI_API_KEY || process.env.STABLE_DIFFUSION_API_KEY;
-  const apiService = process.env.IMAGE_GENERATION_SERVICE || 'openai';
-  const model = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
+  const googleApiKey = getEnv('GOOGLE_API_KEY') || getEnv('GEMINI_API_KEY');
+  const apiKey = googleApiKey || getEnv('AZURE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY') || getEnv('STABLE_DIFFUSION_API_KEY');
+  const apiService = getEnv('IMAGE_GENERATION_SERVICE') || 'openai';
+  const model = getEnv('GEMINI_IMAGE_MODEL') || 'gemini-2.5-flash-image';
   
   // 检测服务类型
   let detectedService = 'none';
   if (googleApiKey) {
     detectedService = 'google';
-  } else if (process.env.AZURE_OPENAI_API_KEY) {
+  } else if (getEnv('AZURE_OPENAI_API_KEY')) {
     detectedService = 'azure';
-  } else if (process.env.OPENAI_API_KEY) {
+  } else if (getEnv('OPENAI_API_KEY')) {
     detectedService = 'openai';
-  } else if (process.env.STABLE_DIFFUSION_API_KEY) {
+  } else if (getEnv('STABLE_DIFFUSION_API_KEY')) {
     detectedService = 'stable-diffusion';
   }
 

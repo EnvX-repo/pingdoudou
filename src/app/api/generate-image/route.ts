@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProxyAgent } from '../../../utils/proxy';
-
+import { getEnv } from '../../../utils/hotEnv';
 // AI图像生成API路由
 // 支持多种AI服务：OpenAI DALL-E, Stable Diffusion等
 
@@ -19,10 +19,10 @@ export async function POST(request: NextRequest) {
     }
 
     // 检查配置的API服务
-    const apiService = process.env.IMAGE_GENERATION_SERVICE || 'openai';
+    const apiService = getEnv('IMAGE_GENERATION_SERVICE') || 'openai';
     // 优先检测Google API Key（以AIza开头）
-    const googleApiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-    const apiKey = googleApiKey || process.env.AZURE_OPENAI_API_KEY || process.env.OPENAI_API_KEY || process.env.STABLE_DIFFUSION_API_KEY;
+    const googleApiKey = getEnv('GOOGLE_API_KEY') || getEnv('GEMINI_API_KEY');
+    const apiKey = googleApiKey || getEnv('AZURE_OPENAI_API_KEY') || getEnv('OPENAI_API_KEY') || getEnv('STABLE_DIFFUSION_API_KEY');
 
     console.log('API配置:', { 
       apiService, 
@@ -118,8 +118,8 @@ async function generateWithGoogleGemini(
 
   // Google Gemini图像生成endpoint
   // 支持的模型：gemini-2.5-flash-image (Nano Banana) 或 gemini-3-pro-image-preview (Nano Banana Pro)
-  const model = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
-  const baseUrl = process.env.GOOGLE_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
+  const model = getEnv('GEMINI_IMAGE_MODEL') || 'gemini-2.5-flash-image';
+  const baseUrl = getEnv('GOOGLE_API_BASE_URL') || 'https://generativelanguage.googleapis.com/v1beta';
   const endpoint = `${baseUrl.replace(/\/$/, '')}/models/${model}:generateContent?key=${apiKey}`;
 
   console.log('Google Gemini API调用:', endpoint);
@@ -320,19 +320,19 @@ async function generateWithOpenRouter(
   apiKey: string,
   fullPrompt: string
 ): Promise<string> {
-  const endpoint = (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1') + '/chat/completions';
+  const endpoint = (getEnv('OPENROUTER_BASE_URL') || 'https://openrouter.ai/api/v1') + '/chat/completions';
   
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${apiKey}`,
-    'HTTP-Referer': process.env.OPENROUTER_HTTP_REFERER || 'https://github.com',
-    'X-Title': process.env.OPENROUTER_X_TITLE || 'Perler Beads Generator',
+    'HTTP-Referer': getEnv('OPENROUTER_HTTP_REFERER') || 'https://github.com',
+    'X-Title': getEnv('OPENROUTER_X_TITLE') || 'Perler Beads Generator',
   };
 
   // OpenRouter支持的图像生成模型
   // 支持的模型：google/gemini-2.5-flash-image, openai/gpt-5-image-mini, bytedance/seedream-4.5
   // 默认使用性价比高的模型
-  const imageModel = process.env.OPENROUTER_IMAGE_MODEL || 'google/gemini-2.5-flash-image';
+  const imageModel = getEnv('OPENROUTER_IMAGE_MODEL') || 'google/gemini-2.5-flash-image';
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -457,10 +457,10 @@ async function generateWithAzureOpenAI(
   const fullPrompt = prompt || `A pixel art pattern using these colors: ${colorDescriptions.join(', ')}. Simple, clean design.`;
 
   // Azure OpenAI配置
-  const baseUrl = process.env.AZURE_OPENAI_BASE_URL || '';
-  const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME || 'dall-e-3';
-  const apiVersion = process.env.AZURE_OPENAI_API_VERSION || '2024-02-15-preview';
-  const resourceName = process.env.AZURE_OPENAI_RESOURCE_NAME || '';
+  const baseUrl = getEnv('AZURE_OPENAI_BASE_URL') || '';
+  const deploymentName = getEnv('AZURE_OPENAI_DEPLOYMENT_NAME') || 'dall-e-3';
+  const apiVersion = getEnv('AZURE_OPENAI_API_VERSION') || '2024-02-15-preview';
+  const resourceName = getEnv('AZURE_OPENAI_RESOURCE_NAME') || '';
 
   // 构建Azure OpenAI endpoint
   // Azure DALL-E endpoint格式: https://{resource-name}.openai.azure.com/openai/deployments/{deployment-name}/images/generations?api-version={api-version}
@@ -537,7 +537,7 @@ async function generateWithStableDiffusion(
 ): Promise<string> {
   // 这里需要根据你使用的Stable Diffusion API进行调整
   // 示例：Replicate API
-  const apiUrl = process.env.STABLE_DIFFUSION_API_URL || 'https://api.replicate.com/v1/predictions';
+  const apiUrl = getEnv('STABLE_DIFFUSION_API_URL') || 'https://api.replicate.com/v1/predictions';
 
   const colorDescriptions = colors.map(hex => `color ${hex}`).join(', ');
   const fullPrompt = prompt || `A pixel art pattern using these colors: ${colorDescriptions}. Simple, clean design.`;
@@ -549,7 +549,7 @@ async function generateWithStableDiffusion(
       'Authorization': `Token ${apiKey}`,
     },
     body: JSON.stringify({
-      version: process.env.STABLE_DIFFUSION_MODEL_VERSION || 'stable-diffusion-xl-base-1.0',
+      version: getEnv('STABLE_DIFFUSION_MODEL_VERSION') || 'stable-diffusion-xl-base-1.0',
       input: {
         prompt: fullPrompt,
         width: 1024,

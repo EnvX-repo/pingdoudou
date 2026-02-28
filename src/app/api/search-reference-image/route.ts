@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProxyAgent } from '../../../utils/proxy';
+import { getEnv } from '../../../utils/hotEnv';
 
 /**
  * 搜索参考图片：当用户输入非自然语言名词（如"小八"）时，联网搜索相关图片URL
@@ -14,7 +15,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '缺少 query 参数' }, { status: 400 });
     }
 
-    const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
+    const apiKey = getEnv('GOOGLE_API_KEY') || getEnv('GEMINI_API_KEY');
     if (!apiKey) {
       return NextResponse.json(
         { error: '未配置 GOOGLE_API_KEY，无法搜索参考图' },
@@ -22,8 +23,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const model = process.env.GEMINI_TEXT_MODEL || 'gemini-2.0-flash-exp';
-    const baseUrl = process.env.GOOGLE_API_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
+    const model = getEnv('GEMINI_TEXT_MODEL') || 'gemini-2.0-flash-exp';
+    const baseUrl = getEnv('GOOGLE_API_BASE_URL') || 'https://generativelanguage.googleapis.com/v1beta';
     const endpoint = `${baseUrl.replace(/\/$/, '')}/models/${model}:generateContent?key=${apiKey}`;
 
     const searchPrompt = `Search the web for information about "${q}". 
