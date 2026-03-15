@@ -114,7 +114,7 @@ async function generateWithGoogleGemini(
   const basePrompt = prompt || `A pixel art pattern using these colors: ${colorDescriptions.join(', ')}. Simple, clean design.`;
   // 强制 Gemini 直接出图：避免返回“你想画什么？”等文字反问导致无法提取图像
   const fullPrompt =
-    `You must generate exactly one image. Do not ask the user any questions. Do not respond with text—output only the image. Image description: ${basePrompt}`;
+    `You must generate exactly one image. The image must be exactly square (1:1 aspect ratio). Do not ask the user any questions. Do not respond with text—output only the image. Image description: ${basePrompt}`;
 
   // Google Gemini图像生成endpoint
   // 支持的模型：gemini-2.5-flash-image (Nano Banana) 或 gemini-3-pro-image-preview (Nano Banana Pro)

@@ -1838,11 +1838,10 @@ async function processImageToPattern(
 
         ctx.drawImage(img, 0, 0);
 
-        // 横轴默认 50 格，纵轴按比例
-        const defaultHorizontalCells = 50;
-        const aspectRatio = img.height / img.width;
-        const N = defaultHorizontalCells;
-        const M = Math.max(1, Math.round(N * aspectRatio));
+        // 横轴纵轴均为 50 格，强制正方形网格
+        const defaultCells = 50;
+        const N = defaultCells;
+        const M = defaultCells;
 
         // AI生成和上传图片都用平均色模式（更平滑、更写实），每个格子取区域平均再映射到调色板
         const t1FallbackColor = palette.find(p => p.hex.toUpperCase() === '#FFFFFF') || palette[0];
