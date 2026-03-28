@@ -303,11 +303,10 @@ async function generateWithOpenAI(
 
   const fullPrompt = prompt || `A pixel art pattern using these colors: ${colorDescriptions.join(', ')}. Simple, clean design.`;
 
-  // 检查是否是OpenRouter API key（格式：sk-or-v1-...）
-  const isOpenRouter = apiKey.startsWith('sk-or-v1-');
-  
-  if (isOpenRouter) {
-    // OpenRouter使用chat/completions端点进行图像生成
+  // 使用chat/completions端点：OpenRouter key 或配置了自定义 base URL（如 New API 代理）
+  const useChat = apiKey.startsWith('sk-or-v1-') || !!getEnv('OPENROUTER_BASE_URL');
+
+  if (useChat) {
     return await generateWithOpenRouter(prompt, colors, apiKey, fullPrompt);
   } else {
     // 标准OpenAI使用images/generations端点
@@ -387,16 +386,23 @@ async function generateWithOpenRouter(
     if (message.images && message.images.length > 0) {
       return message.images[0].image_url?.url || message.images[0].url;
     }
-    // 检查content中是否有图像URL
+    // 检查content中是否有图像
     if (message.content) {
-      const imageMatch = message.content.match(/https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)/i);
-      if (imageMatch) {
-        return imageMatch[0];
+      // base64 markdown 格式：![image](data:image/jpeg;base64,...)
+      const mdMatch = message.content.match(/!\[[^\]]*\]\((data:image\/(png|jpeg|jpg|gif|webp);base64,[^)]+)\)/i);
+      if (mdMatch) {
+        console.log('成功提取图像数据(Markdown base64)，长度:', mdMatch[1].length);
+        return mdMatch[1];
+      }
+      // URL 格式
+      const urlMatch = message.content.match(/https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp)/i);
+      if (urlMatch) {
+        return urlMatch[0];
       }
     }
   }
-  
-  throw new Error('OpenRouter返回格式异常，无法提取图像URL');
+
+  throw new Error('OpenRouter返回格式异常，无法提取图像数据');
 }
 
 // 标准OpenAI图像生成
