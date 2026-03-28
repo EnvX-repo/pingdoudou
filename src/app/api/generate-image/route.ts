@@ -120,7 +120,7 @@ async function generateWithGoogleGemini(
   // 支持的模型：gemini-2.5-flash-image (Nano Banana) 或 gemini-3-pro-image-preview (Nano Banana Pro)
   const model = getEnv('GEMINI_IMAGE_MODEL') || 'gemini-3.1-flash-image-preview';
   const baseUrl = getEnv('GOOGLE_API_BASE_URL') || 'https://generativelanguage.googleapis.com/v1beta';
-  const endpoint = `${baseUrl.replace(/\/$/, '')}/models/${model}:generateContent?key=${apiKey}`;
+  const endpoint = `${baseUrl.replace(/\/$/, '')}/models/${model}:generateContent`;
 
   console.log('Google Gemini API调用:', endpoint);
   console.log('使用模型:', model);
@@ -173,6 +173,8 @@ async function generateWithGoogleGemini(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'x-goog-api-key': apiKey,
       },
       body: JSON.stringify({
         contents: [
