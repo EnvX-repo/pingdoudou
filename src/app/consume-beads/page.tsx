@@ -432,7 +432,7 @@ export default function ConsumeBeadsPage() {
   const referenceImageInputRef = useRef<HTMLInputElement>(null);
   const nextCustomIdRef = useRef(1000);
   const [editingPatternId, setEditingPatternId] = useState<number | null>(null);
-  const [autoIncludeBlackWhite, setAutoIncludeBlackWhite] = useState(true);
+  const autoIncludeBlackWhite = false;
   
   // 撤销历史记录
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
@@ -1357,15 +1357,6 @@ export default function ConsumeBeadsPage() {
               <p className="text-sm">
                 已选择 <span className="font-bold text-blue-600 dark:text-blue-400">{selectedColors.size}</span> 种颜色
               </p>
-              <label className="flex items-center gap-2 mt-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoIncludeBlackWhite}
-                  onChange={(e) => setAutoIncludeBlackWhite(e.target.checked)}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-                自动加入黑白豆（用于描边/高光）
-              </label>
             </div>
 
             {/* AI生成随机图纸（3套） */}
