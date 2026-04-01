@@ -11,6 +11,7 @@ import { downloadImage } from '../../utils/imageDownloader';
 import PatternEditor from '../../components/PatternEditor';
 
 const COLOR_PRESETS_STORAGE_KEY = 'consume-beads-color-presets';
+const GENERATED_PATTERNS_STORAGE_KEY = 'consume-beads-generated-patterns';
 
 interface ColorPreset {
   id: string;
@@ -35,6 +36,32 @@ function saveColorPresets(presets: ColorPreset[]) {
   try {
     localStorage.setItem(COLOR_PRESETS_STORAGE_KEY, JSON.stringify(presets));
   } catch (_) {}
+}
+
+function loadGeneratedPatterns(): GeneratedPattern[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(GENERATED_PATTERNS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // 过滤掉正在处理中的（不完整的）图纸
+    return parsed.filter((p: GeneratedPattern) => !p.isProcessing && p.mappedData !== null);
+  } catch {
+    return [];
+  }
+}
+
+function saveGeneratedPatterns(patterns: GeneratedPattern[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    // 只保存已完成的图纸（有 mappedData 的）
+    const toSave = patterns.filter(p => !p.isProcessing && p.mappedData !== null);
+    localStorage.setItem(GENERATED_PATTERNS_STORAGE_KEY, JSON.stringify(toSave));
+  } catch (e) {
+    // localStorage 可能已满，尝试清理
+    console.warn('保存图纸到 localStorage 失败:', e);
+  }
 }
 
 interface GeneratedPattern {
@@ -354,7 +381,7 @@ export default function ConsumeBeadsPage() {
   // 状态管理
   const [selectedColors, setSelectedColors] = useState<Set<string>>(new Set());
   const [colorSystem, setColorSystem] = useState<ColorSystem>('MARD');
-  const [generatedPatterns, setGeneratedPatterns] = useState<GeneratedPattern[]>([]);
+  const [generatedPatterns, setGeneratedPatterns] = useState<GeneratedPattern[]>(() => loadGeneratedPatterns());
   const [isGenerating, setIsGenerating] = useState(false);
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [isProcessingUpload, setIsProcessingUpload] = useState(false);
@@ -385,6 +412,15 @@ export default function ConsumeBeadsPage() {
   useEffect(() => {
     setColorPresets(loadColorPresets());
   }, []);
+
+  // 持久化生成的图纸到 localStorage
+  useEffect(() => {
+    // 只在有完成的图纸时保存
+    const completedPatterns = generatedPatterns.filter(p => !p.isProcessing && p.mappedData !== null);
+    if (completedPatterns.length > 0) {
+      saveGeneratedPatterns(generatedPatterns);
+    }
+  }, [generatedPatterns]);
   
   // 保存当前状态到历史记录
   const saveToHistory = useCallback(() => {
@@ -1483,6 +1519,37 @@ function PatternCard({
   isGenerating?: boolean;
 }) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
+  const [redrawCount, setRedrawCount] = React.useState(0);
+
+  // 监听页面可见性变化，确保移动端滚动回来后重绘
+  React.useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setRedrawCount(prev => prev + 1);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  // 使用 IntersectionObserver 检测 canvas 进入可视区域时重绘
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setRedrawCount(prev => prev + 1);
+          }
+        }
+      },
+      { threshold: 0.1 }
+    );
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
 
   React.useEffect(() => {
     if (!canvasRef.current || !pattern.mappedData || !pattern.gridDimensions) return;
@@ -1496,24 +1563,6 @@ function PatternCard({
     canvas.width = N * cellSize;
     canvas.height = M * cellSize;
 
-    // #region agent log
-    const borderColorsInCanvas: string[] = [];
-    for (let i = 0; i < N; i++) {
-      if (pattern.mappedData[0]?.[i]?.color) borderColorsInCanvas.push(pattern.mappedData[0][i].color);
-      if (M > 1 && pattern.mappedData[M - 1]?.[i]?.color) borderColorsInCanvas.push(pattern.mappedData[M - 1][i].color);
-    }
-    for (let j = 0; j < M; j++) {
-      if (pattern.mappedData[j]?.[0]?.color) borderColorsInCanvas.push(pattern.mappedData[j][0].color);
-      if (N > 1 && pattern.mappedData[j]?.[N - 1]?.color) borderColorsInCanvas.push(pattern.mappedData[j][N - 1].color);
-    }
-    const blueInCanvasBorder = borderColorsInCanvas.filter(c => {
-      const h = (c || '').toUpperCase().replace('#', '');
-      if (h.length !== 6) return false;
-      const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-      return b >= 150 && r <= 120 && g <= 120;
-    });
-    fetch('http://127.0.0.1:7242/ingest/03a812c0-deee-4704-870e-69350ddab099',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'consume-beads/page.tsx:1329',message:'Border colors in canvas render',data:{borderColorsInCanvas:borderColorsInCanvas.slice(0,10),blueInCanvasBorder:blueInCanvasBorder.length,blueColors:blueInCanvasBorder.slice(0,5)},timestamp:Date.now(),runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-    // #endregion
     // 绘制图案色块
     for (let j = 0; j < M; j++) {
       for (let i = 0; i < N; i++) {
@@ -1530,7 +1579,7 @@ function PatternCard({
         ctx.strokeRect(x, y, cellSize, cellSize);
       }
     }
-  }, [pattern]);
+  }, [pattern, redrawCount]);
 
   if (pattern.isProcessing) {
     return (

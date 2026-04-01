@@ -134,59 +134,82 @@ const PixelatedPreviewCanvas: React.FC<PixelatedPreviewCanvasProps> = ({
 
   }, [darkModeState]); // Depend on darkModeState to re-run if needed externally
 
+  // 用于触发重绘的计数器（窗口 resize / 页面可见性变化时递增）
+  const [redrawTrigger, setRedrawTrigger] = useState(0);
+
+  // 监听窗口 resize 和页面可见性变化，触发 canvas 重绘
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleResize = () => setRedrawTrigger(prev => prev + 1);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setRedrawTrigger(prev => prev + 1);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   // 设置canvas尺寸，保持原始比例，足够大
   useEffect(() => {
     if (!gridDimensions || !canvasRef.current) return;
-    
+
     const { N, M } = gridDimensions;
     const canvas = canvasRef.current;
-    
+
     // 计算合适的cellSize，确保画布足够大且保持比例
-    // 基础cellSize：每个格子至少10像素
-    const baseCellSize = 10;
     const minCellSize = 8;
     const maxCellSize = 30;
-    
+
     // 根据可用空间计算cellSize
     // 优先考虑宽度，确保画布不会太宽
     const maxWidth = typeof window !== 'undefined' ? Math.min(1200, window.innerWidth * 0.9) : 800;
     const maxHeight = typeof window !== 'undefined' ? Math.min(800, window.innerHeight * 0.7) : 600;
-    
+
     // 计算基于宽度的cellSize
     const cellSizeByWidth = Math.floor(maxWidth / N);
     // 计算基于高度的cellSize
     const cellSizeByHeight = Math.floor(maxHeight / M);
-    
+
     // 取较小的值，确保两个方向都能显示
     let cellSize = Math.min(cellSizeByWidth, cellSizeByHeight);
-    
+
     // 限制在合理范围内
     cellSize = Math.max(minCellSize, Math.min(maxCellSize, cellSize));
-    
+
     // 设置canvas实际尺寸（保持原始比例）
     const canvasWidth = N * cellSize;
     const canvasHeight = M * cellSize;
-    
+
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
-    
+
     // CSS样式保持auto，让浏览器自动缩放显示
     canvas.style.width = '';
     canvas.style.height = '';
     canvas.style.maxWidth = '100%';
     canvas.style.maxHeight = '100%';
-    
+
     console.log(`Canvas size set: ${canvasWidth}x${canvasHeight} (cellSize: ${cellSize}, grid: ${N}x${M})`);
-  }, [gridDimensions]);
+  }, [gridDimensions, redrawTrigger]);
 
   // Update useEffect for drawing to depend on darkModeState as well
   useEffect(() => {
     // Ensure darkModeState is not null before drawing
     if (mappedPixelData && gridDimensions && canvasRef.current && darkModeState !== null) {
-      console.log(`Redrawing canvas, dark mode: ${darkModeState}`); // Log redraw trigger
       drawPixelatedCanvas(mappedPixelData, canvasRef.current, gridDimensions, highlightColorKey, isHighlighting);
     }
-  }, [mappedPixelData, gridDimensions, canvasRef, darkModeState, highlightColorKey, isHighlighting]); // Add darkModeState dependency
+  }, [mappedPixelData, gridDimensions, canvasRef, darkModeState, highlightColorKey, isHighlighting, redrawTrigger]);
 
   // 处理高亮效果
   useEffect(() => {
