@@ -433,6 +433,7 @@ export default function ConsumeBeadsPage() {
   const nextCustomIdRef = useRef(1000);
   const [editingPatternId, setEditingPatternId] = useState<number | null>(null);
   const autoIncludeBlackWhite = false;
+  const [gridSize, setGridSize] = useState(50);
   
   // 撤销历史记录
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
@@ -622,7 +623,7 @@ export default function ConsumeBeadsPage() {
             i,
             paletteWithBW,
             colors,
-            { maxColors: complexity === 'simple' ? 6 : undefined }
+            { maxColors: complexity === 'simple' ? 6 : undefined, gridSize }
           );
 
           // 更新对应的模式
@@ -709,7 +710,7 @@ export default function ConsumeBeadsPage() {
         patternId,
         paletteWithBW,
         colors,
-        { maxColors: 6, useAverageMode: false } // 简单模式，最多6种颜色
+        { maxColors: 6, useAverageMode: false, gridSize } // 简单模式，最多6种颜色
       );
       
       // 更新图纸
@@ -953,7 +954,7 @@ export default function ConsumeBeadsPage() {
                 customId,
                 paletteWithBW,
                 colors,
-                { maxColors: 10, useAverageMode }
+                { maxColors: 10, useAverageMode, gridSize }
               );
               const withPrompt1 = {
                 ...patternRealistic,
@@ -979,7 +980,7 @@ export default function ConsumeBeadsPage() {
                 customId2,
                 paletteWithBW,
                 colors,
-                { maxColors: 10, useAverageMode }
+                { maxColors: 10, useAverageMode, gridSize }
               );
               const withPrompt2 = {
                 ...patternCartoon,
@@ -1013,7 +1014,7 @@ export default function ConsumeBeadsPage() {
         customId,
         paletteWithBW,
         colors,
-        { maxColors: 10, useAverageMode }
+        { maxColors: 10, useAverageMode, gridSize }
       );
       // 存原始关键词和参考图（如果有），用于重新生成
       const patternWithPrompt = { 
@@ -1129,7 +1130,7 @@ export default function ConsumeBeadsPage() {
         currentPatternId,
         paletteWithBW,
         colors,
-        { maxColors: 10, useAverageMode } // 重新生成：限制最多10种颜色
+        { maxColors: 10, useAverageMode, gridSize } // 重新生成：限制最多10种颜色
       );
       const patternWithPrompt = { 
         ...pattern, 
@@ -1190,7 +1191,7 @@ export default function ConsumeBeadsPage() {
           0,
           paletteWithBW,
           colors,
-          { useAverageMode: true }
+          { useAverageMode: true, gridSize }
         );
 
         // 替换生成的图纸列表
@@ -1357,6 +1358,32 @@ export default function ConsumeBeadsPage() {
               <p className="text-sm">
                 已选择 <span className="font-bold text-blue-600 dark:text-blue-400">{selectedColors.size}</span> 种颜色
               </p>
+            </div>
+
+            {/* 图纸尺寸选择 */}
+            <div className="mt-4">
+              <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">图纸尺寸</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {[
+                  { size: 29, label: '小号', desc: '29×29 · ~14.5cm' },
+                  { size: 50, label: '中号', desc: '50×50 · ~25cm' },
+                  { size: 70, label: '大号', desc: '70×70 · ~35cm' },
+                  { size: 100, label: '超大', desc: '100×100 · ~50cm' },
+                ].map(opt => (
+                  <button
+                    key={opt.size}
+                    onClick={() => setGridSize(opt.size)}
+                    className={`px-3 py-2 rounded-lg border text-sm transition-colors ${
+                      gridSize === opt.size
+                        ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-semibold'
+                        : 'border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-400'
+                    }`}
+                  >
+                    <div>{opt.label}</div>
+                    <div className="text-xs opacity-70">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* AI生成随机图纸（3套） */}
@@ -1894,9 +1921,10 @@ async function processImageToPattern(
   id: number,
   palette: PaletteColor[],
   selectedColors: string[],
-  options?: { useAverageMode?: boolean; maxColors?: number }
+  options?: { useAverageMode?: boolean; maxColors?: number; gridSize?: number }
 ): Promise<GeneratedPattern> {
   const maxColors = options?.maxColors;
+  const gridSize = options?.gridSize || 50;
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -1916,10 +1944,9 @@ async function processImageToPattern(
 
         ctx.drawImage(img, 0, 0);
 
-        // 横轴纵轴均为 50 格，强制正方形网格
-        const defaultCells = 50;
-        const N = defaultCells;
-        const M = defaultCells;
+        // 正方形网格，尺寸由用户选择
+        const N = gridSize;
+        const M = gridSize;
 
         // AI生成和上传图片都用平均色模式（更平滑、更写实），每个格子取区域平均再映射到调色板
         const t1FallbackColor = palette.find(p => p.hex.toUpperCase() === '#FFFFFF') || palette[0];
