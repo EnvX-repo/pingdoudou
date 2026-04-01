@@ -159,7 +159,19 @@ function pickRandomPrompt(category: { name: string; prompts: string[] }): { name
   return { name: category.name, prompt };
 }
 
-// 将四边相连的“背景色”标记为不填色（external），背景留空
+// 计算两个 hex 颜色之间的欧氏距离平方
+function hexColorDistanceSq(hex1: string, hex2: string): number {
+  const parse = (h: string) => {
+    const s = h.replace('#', '');
+    return { r: parseInt(s.slice(0, 2), 16), g: parseInt(s.slice(2, 4), 16), b: parseInt(s.slice(4, 6), 16) };
+  };
+  const a = parse(hex1), b = parse(hex2);
+  const dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b;
+  return dr * dr + dg * dg + db * db;
+}
+
+// 将四边相连的”背景色”标记为不填色（external），背景留空
+// 使用 8 连通 + 颜色距离阈值，确保轮廓封闭且清除边缘噪点
 function markBackgroundAsExternal(mappedData: MappedPixel[][], N: number, M: number): MappedPixel[][] {
   const result = mappedData.map(row => row.map(cell => ({ ...cell })));
   const visited = Array(M).fill(null).map(() => Array(N).fill(false));
@@ -179,24 +191,35 @@ function markBackgroundAsExternal(mappedData: MappedPixel[][], N: number, M: num
   borderColors.forEach(c => { count[c] = (count[c] || 0) + 1; });
   const backgroundColor = Object.entries(count).sort((a, b) => b[1] - a[1])[0][0];
 
-  // 从边框出发，将与该背景色连通的格子都标为 external
+  // 颜色距离阈值：距离平方 < 3600（约 RGB 各差 35 以内视为同一背景色）
+  const BG_DIST_THRESHOLD = 3600;
+
+  const isBgColor = (hex: string) =>
+    hex.toUpperCase() === backgroundColor.toUpperCase() ||
+    hexColorDistanceSq(hex, backgroundColor) < BG_DIST_THRESHOLD;
+
+  // 从边框出发，8 连通 flood-fill 相似背景色
   const stack: { r: number; c: number }[] = [];
   for (let i = 0; i < N; i++) {
-    if (result[0][i]?.color === backgroundColor) stack.push({ r: 0, c: i });
-    if (M > 1 && result[M - 1][i]?.color === backgroundColor) stack.push({ r: M - 1, c: i });
+    if (result[0][i]?.color && isBgColor(result[0][i].color)) stack.push({ r: 0, c: i });
+    if (M > 1 && result[M - 1][i]?.color && isBgColor(result[M - 1][i].color)) stack.push({ r: M - 1, c: i });
   }
   for (let j = 0; j < M; j++) {
-    if (result[j][0]?.color === backgroundColor) stack.push({ r: j, c: 0 });
-    if (N > 1 && result[j][N - 1]?.color === backgroundColor) stack.push({ r: j, c: N - 1 });
+    if (result[j][0]?.color && isBgColor(result[j][0].color)) stack.push({ r: j, c: 0 });
+    if (N > 1 && result[j][N - 1]?.color && isBgColor(result[j][N - 1].color)) stack.push({ r: j, c: N - 1 });
   }
   while (stack.length > 0) {
     const { r, c } = stack.pop()!;
     if (r < 0 || r >= M || c < 0 || c >= N || visited[r][c]) continue;
     const cell = result[r][c];
-    if (!cell || cell.color !== backgroundColor) continue;
+    if (!cell?.color || !isBgColor(cell.color)) continue;
     visited[r][c] = true;
     result[r][c] = { ...transparentColorData };
-    stack.push({ r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 });
+    // 8 连通：上下左右 + 四个对角
+    stack.push(
+      { r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 },
+      { r: r - 1, c: c - 1 }, { r: r - 1, c: c + 1 }, { r: r + 1, c: c - 1 }, { r: r + 1, c: c + 1 }
+    );
   }
   return result;
 }
@@ -309,7 +332,8 @@ function addWhiteEdgeOutline(
   return result;
 }
 
-// 边缘密封：只保留与主体连通的豆子，去掉“东一颗西一颗”的孤立格（拼豆需连在一起）
+// 边缘密封：只保留与主体连通的豆子，去掉”东一颗西一颗”的孤立格（拼豆需连在一起）
+// 使用 8 连通，避免对角连接的主体被误判为孤立
 function removeIsolatedPixels(mappedData: MappedPixel[][], N: number, M: number): MappedPixel[][] {
   const result = mappedData.map(row => row.map(cell => ({ ...cell })));
   const visited = Array(M).fill(null).map(() => Array(N).fill(false));
@@ -328,7 +352,11 @@ function removeIsolatedPixels(mappedData: MappedPixel[][], N: number, M: number)
         if (r < 0 || r >= M || c < 0 || c >= N || visited[r][c] || !isFilled(r, c)) continue;
         visited[r][c] = true;
         comp.push({ r, c });
-        stack.push({ r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 });
+        // 8 连通
+        stack.push(
+          { r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 },
+          { r: r - 1, c: c - 1 }, { r: r - 1, c: c + 1 }, { r: r + 1, c: c - 1 }, { r: r + 1, c: c + 1 }
+        );
       }
       if (comp.length > 0) components.push(comp);
     }
@@ -1925,101 +1953,111 @@ async function processImageToPattern(
             borderColors.forEach(c => { count[c] = (count[c] || 0) + 1; });
             backgroundColor = Object.entries(count).sort((a, b) => b[1] - a[1])[0][0];
           }
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/03a812c0-deee-4704-870e-69350ddab099',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'consume-beads/page.tsx:1685',message:'Border colors before blue removal',data:{borderColors:borderColors.slice(0,20),backgroundColor,N,M},timestamp:Date.now(),runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
-          // 1.5 检测并清除最外圈的蓝色边框（AI 常画蓝边，即使不是最多也清掉）
+
+          // 1.5 检测并清除最外两圈的蓝色边框（AI 常画蓝边）
           const isBlue = (hex: string) => {
             const h = (hex || '').toUpperCase().replace('#', '');
             if (h.length !== 6) return false;
             const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-            const result = b >= 200 && r <= 80 && g <= 80;
-            // #region agent log
-            if (result || (b >= 150 && r <= 120 && g <= 120)) {
-              fetch('http://127.0.0.1:7242/ingest/03a812c0-deee-4704-870e-69350ddab099',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'consume-beads/page.tsx:1692',message:'isBlue check',data:{hex,r,g,b,result},timestamp:Date.now(),runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-            }
-            // #endregion
-            return result;
+            return b >= 200 && r <= 80 && g <= 80;
           };
-          let blueRemovedCount = 0;
-          for (let i = 0; i < N; i++) {
-            if (mappedData[0]?.[i]?.color && isBlue(mappedData[0][i].color)) {
-              mappedData[0][i] = { ...transparentColorData };
-              blueRemovedCount++;
+          // 清除外圈 2 层的蓝色像素
+          for (let layer = 0; layer < 2; layer++) {
+            for (let i = layer; i < N - layer; i++) {
+              if (mappedData[layer]?.[i]?.color && isBlue(mappedData[layer][i].color)) {
+                mappedData[layer][i] = { ...transparentColorData };
+              }
+              if (M > 1 && mappedData[M - 1 - layer]?.[i]?.color && isBlue(mappedData[M - 1 - layer][i].color)) {
+                mappedData[M - 1 - layer][i] = { ...transparentColorData };
+              }
             }
-            if (M > 1 && mappedData[M - 1]?.[i]?.color && isBlue(mappedData[M - 1][i].color)) {
-              mappedData[M - 1][i] = { ...transparentColorData };
-              blueRemovedCount++;
-            }
-          }
-          for (let j = 0; j < M; j++) {
-            if (mappedData[j]?.[0]?.color && isBlue(mappedData[j][0].color)) {
-              mappedData[j][0] = { ...transparentColorData };
-              blueRemovedCount++;
-            }
-            if (N > 1 && mappedData[j]?.[N - 1]?.color && isBlue(mappedData[j][N - 1].color)) {
-              mappedData[j][N - 1] = { ...transparentColorData };
-              blueRemovedCount++;
+            for (let j = layer; j < M - layer; j++) {
+              if (mappedData[j]?.[layer]?.color && isBlue(mappedData[j][layer].color)) {
+                mappedData[j][layer] = { ...transparentColorData };
+              }
+              if (N > 1 && mappedData[j]?.[N - 1 - layer]?.color && isBlue(mappedData[j][N - 1 - layer].color)) {
+                mappedData[j][N - 1 - layer] = { ...transparentColorData };
+              }
             }
           }
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/03a812c0-deee-4704-870e-69350ddab099',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'consume-beads/page.tsx:1713',message:'Blue removal result',data:{blueRemovedCount},timestamp:Date.now(),runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-          // #endregion
-          // 2. 只把「与边框连通的背景色」标成 external，主体内的白色/浅色一律保留
-          // （从边框出发 flood-fill 同色，只标这一片为背景；其余全部保留，浅色也会在图纸中表现）
+
+          // 2. 8 连通 flood-fill：从边框出发，用颜色距离阈值将相似背景色标记为 external
+          const BG_DIST_THRESHOLD = 3600; // RGB 各差 ~35 以内
           if (backgroundColor) {
-            const bgUpper = backgroundColor.toUpperCase();
+            const isBgColor = (hex: string) =>
+              hex.toUpperCase() === backgroundColor!.toUpperCase() ||
+              hexColorDistanceSq(hex, backgroundColor!) < BG_DIST_THRESHOLD;
+
             const visited = Array(M).fill(null).map(() => Array(N).fill(false));
             const stack: { r: number; c: number }[] = [];
             for (let i = 0; i < N; i++) {
-              if (mappedData[0]?.[i]?.color?.toUpperCase() === bgUpper) stack.push({ r: 0, c: i });
-              if (M > 1 && mappedData[M - 1]?.[i]?.color?.toUpperCase() === bgUpper) stack.push({ r: M - 1, c: i });
+              if (mappedData[0]?.[i]?.color && isBgColor(mappedData[0][i].color)) stack.push({ r: 0, c: i });
+              if (M > 1 && mappedData[M - 1]?.[i]?.color && isBgColor(mappedData[M - 1][i].color)) stack.push({ r: M - 1, c: i });
             }
             for (let j = 0; j < M; j++) {
-              if (mappedData[j]?.[0]?.color?.toUpperCase() === bgUpper) stack.push({ r: j, c: 0 });
-              if (N > 1 && mappedData[j]?.[N - 1]?.color?.toUpperCase() === bgUpper) stack.push({ r: j, c: N - 1 });
+              if (mappedData[j]?.[0]?.color && isBgColor(mappedData[j][0].color)) stack.push({ r: j, c: 0 });
+              if (N > 1 && mappedData[j]?.[N - 1]?.color && isBgColor(mappedData[j][N - 1].color)) stack.push({ r: j, c: N - 1 });
             }
             while (stack.length > 0) {
               const { r, c } = stack.pop()!;
               if (r < 0 || r >= M || c < 0 || c >= N || visited[r][c]) continue;
               const cell = mappedData[r]?.[c];
-              if (!cell?.color || cell.color.toUpperCase() !== bgUpper) continue;
+              if (!cell?.color || cell.isExternal) { visited[r][c] = true; continue; }
+              if (!isBgColor(cell.color)) continue;
               visited[r][c] = true;
               mappedData[r][c] = { ...transparentColorData };
-              stack.push({ r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 });
+              // 8 连通
+              stack.push(
+                { r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 },
+                { r: r - 1, c: c - 1 }, { r: r - 1, c: c + 1 }, { r: r + 1, c: c - 1 }, { r: r + 1, c: c + 1 }
+              );
             }
           }
-          
-          // 5. 去掉孤立豆子，只保留与主体连通的区域
-          mappedData = removeIsolatedPixels(mappedData, N, M);
-          // #region agent log
-          const checkBorderAfterStep = (step: string) => {
-            const borderColorsAfter: string[] = [];
+
+          // 3. 形态学闭运算：膨胀背景 1px → 收缩 1px，封闭轮廓上的小缺口
+          // 膨胀：如果一个非 external 像素的 8 邻域中有 ≥5 个 external，则标记为 external
+          const dilated = mappedData.map(row => row.map(cell => ({ ...cell })));
+          for (let j = 0; j < M; j++) {
             for (let i = 0; i < N; i++) {
-              if (mappedData[0]?.[i]?.color) borderColorsAfter.push(mappedData[0][i].color);
-              if (M > 1 && mappedData[M - 1]?.[i]?.color) borderColorsAfter.push(mappedData[M - 1][i].color);
+              if (mappedData[j][i]?.isExternal) continue;
+              let extCount = 0;
+              for (let dj = -1; dj <= 1; dj++) {
+                for (let di = -1; di <= 1; di++) {
+                  if (dj === 0 && di === 0) continue;
+                  const nj = j + dj, ni = i + di;
+                  if (nj < 0 || nj >= M || ni < 0 || ni >= N || mappedData[nj][ni]?.isExternal) extCount++;
+                }
+              }
+              if (extCount >= 5) {
+                dilated[j][i] = { ...transparentColorData };
+              }
             }
-            for (let j = 0; j < M; j++) {
-              if (mappedData[j]?.[0]?.color) borderColorsAfter.push(mappedData[j][0].color);
-              if (N > 1 && mappedData[j]?.[N - 1]?.color) borderColorsAfter.push(mappedData[j][N - 1].color);
+          }
+          // 收缩：如果一个 external 像素的 8 邻域中有 ≥5 个非 external（在膨胀前），则恢复原色
+          for (let j = 0; j < M; j++) {
+            for (let i = 0; i < N; i++) {
+              if (!dilated[j][i]?.isExternal) continue;
+              // 只恢复被膨胀新增的像素（原本不是 external 的）
+              if (mappedData[j][i]?.isExternal) continue;
+              let filledCount = 0;
+              for (let dj = -1; dj <= 1; dj++) {
+                for (let di = -1; di <= 1; di++) {
+                  if (dj === 0 && di === 0) continue;
+                  const nj = j + dj, ni = i + di;
+                  if (nj >= 0 && nj < M && ni >= 0 && ni < N && !dilated[nj][ni]?.isExternal) filledCount++;
+                }
+              }
+              if (filledCount >= 5) {
+                dilated[j][i] = { ...mappedData[j][i] };
+              }
             }
-            const blueInBorder = borderColorsAfter.filter(c => {
-              const h = (c || '').toUpperCase().replace('#', '');
-              if (h.length !== 6) return false;
-              const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-              return b >= 150 && r <= 120 && g <= 120;
-            });
-            fetch('http://127.0.0.1:7242/ingest/03a812c0-deee-4704-870e-69350ddab099',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'consume-beads/page.tsx:1764',message:`Border colors after ${step}`,data:{step,borderColorsAfter:borderColorsAfter.slice(0,10),blueInBorder:blueInBorder.length,blueColors:blueInBorder.slice(0,5)},timestamp:Date.now(),runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-          };
-          checkBorderAfterStep('removeIsolatedPixels');
-          // #endregion
-          // 6. 灰色包边功能已取消（避免选到不合适的颜色如蓝色、棕色）
-          // mappedData = addWhiteEdgeOutline(mappedData, N, M, palette);
-          // 7. 再次去掉散落豆子
+          }
+          mappedData = dilated;
+
+          // 4. 去掉孤立豆子，只保留与主体连通的区域
           mappedData = removeIsolatedPixels(mappedData, N, M);
-          // #region agent log
-          checkBorderAfterStep('removeIsolatedPixels-final');
-          // #endregion
+          // 5. 再次去掉散落豆子
+          mappedData = removeIsolatedPixels(mappedData, N, M);
         } else {
           // AI随机生成的图纸：标记背景为 external（不填色）
           mappedData = markBackgroundAsExternal(mappedData, N, M);
