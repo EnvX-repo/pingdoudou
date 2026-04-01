@@ -432,6 +432,7 @@ export default function ConsumeBeadsPage() {
   const referenceImageInputRef = useRef<HTMLInputElement>(null);
   const nextCustomIdRef = useRef(1000);
   const [editingPatternId, setEditingPatternId] = useState<number | null>(null);
+  const [autoIncludeBlackWhite, setAutoIncludeBlackWhite] = useState(true);
   
   // 撤销历史记录
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
@@ -578,7 +579,7 @@ export default function ConsumeBeadsPage() {
     }));
     setGeneratedPatterns(initialPatterns);
 
-    const colors = ensureBlackWhiteInColorList(Array.from(selectedColors));
+    const colors = autoIncludeBlackWhite ? ensureBlackWhiteInColorList(Array.from(selectedColors)) : Array.from(selectedColors);
     const activePalette = fullBeadPalette.filter(c => selectedColors.has(c.hex));
 
     // 逐个生成图像并处理：随机风格（写实/卡通）；前 2 张简单少色，第 3 张复杂多色
@@ -614,7 +615,7 @@ export default function ConsumeBeadsPage() {
         
         if (imageUrl) {
           // 处理图像转换为拼豆图纸（调色板自动包含黑白）；简单模式限制最多 6 色
-          const paletteWithBW = ensureBlackWhiteInPalette(activePalette);
+          const paletteWithBW = autoIncludeBlackWhite ? ensureBlackWhiteInPalette(activePalette) : activePalette;
           const pattern = await processImageToPattern(
             imageUrl,
             selectedTemplates[i].name,
@@ -679,9 +680,9 @@ export default function ConsumeBeadsPage() {
     ));
     setIsGenerating(true);
     
-    const colors = ensureBlackWhiteInColorList(Array.from(selectedColors));
+    const colors = autoIncludeBlackWhite ? ensureBlackWhiteInColorList(Array.from(selectedColors)) : Array.from(selectedColors);
     const activePalette = fullBeadPalette.filter(c => selectedColors.has(c.hex));
-    const paletteWithBW = ensureBlackWhiteInPalette(activePalette);
+    const paletteWithBW = autoIncludeBlackWhite ? ensureBlackWhiteInPalette(activePalette) : activePalette;
     
     try {
       const style = pickRandomStyle();
@@ -823,9 +824,9 @@ export default function ConsumeBeadsPage() {
     setGeneratedPatterns(prev => [...prev, placeholder]);
     setIsGeneratingCustom(true);
 
-    const colors = ensureBlackWhiteInColorList(Array.from(selectedColors));
+    const colors = autoIncludeBlackWhite ? ensureBlackWhiteInColorList(Array.from(selectedColors)) : Array.from(selectedColors);
     const activePalette = fullBeadPalette.filter(c => selectedColors.has(c.hex));
-    const paletteWithBW = ensureBlackWhiteInPalette(activePalette);
+    const paletteWithBW = autoIncludeBlackWhite ? ensureBlackWhiteInPalette(activePalette) : activePalette;
 
     try {
       let imageUrl: string;
@@ -1060,9 +1061,9 @@ export default function ConsumeBeadsPage() {
     setGeneratedPatterns(prev => prev.map(p => (p.id === currentPatternId ? placeholder : p)));
     setIsGeneratingCustom(true);
 
-    const colors = ensureBlackWhiteInColorList(Array.from(selectedColors));
+    const colors = autoIncludeBlackWhite ? ensureBlackWhiteInColorList(Array.from(selectedColors)) : Array.from(selectedColors);
     const activePalette = fullBeadPalette.filter(c => selectedColors.has(c.hex));
-    const paletteWithBW = ensureBlackWhiteInPalette(activePalette);
+    const paletteWithBW = autoIncludeBlackWhite ? ensureBlackWhiteInPalette(activePalette) : activePalette;
 
     try {
       let imageUrl: string;
@@ -1180,7 +1181,7 @@ export default function ConsumeBeadsPage() {
       try {
         const colors = Array.from(selectedColors);
         const activePalette = fullBeadPalette.filter(c => selectedColors.has(c.hex));
-        const paletteWithBW = ensureBlackWhiteInPalette(activePalette);
+        const paletteWithBW = autoIncludeBlackWhite ? ensureBlackWhiteInPalette(activePalette) : activePalette;
 
         // 上传图片：用当前选择的颜色还原图片，尽量贴近原图（平均色模式）
         const pattern = await processImageToPattern(
@@ -1356,6 +1357,15 @@ export default function ConsumeBeadsPage() {
               <p className="text-sm">
                 已选择 <span className="font-bold text-blue-600 dark:text-blue-400">{selectedColors.size}</span> 种颜色
               </p>
+              <label className="flex items-center gap-2 mt-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoIncludeBlackWhite}
+                  onChange={(e) => setAutoIncludeBlackWhite(e.target.checked)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                自动加入黑白豆（用于描边/高光）
+              </label>
             </div>
 
             {/* AI生成随机图纸（3套） */}
