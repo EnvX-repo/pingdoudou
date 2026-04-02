@@ -907,11 +907,12 @@ export default function ConsumeBeadsPage() {
           referenceImage: referenceImage!, // 传递参考图
         });
       } else if (hasImage) {
-        // 只有参考图：经过 AI 按拼豆风格重绘
-        imageUrl = await generateAIImage(colors, 'Recreate this image faithfully. Keep the original colors, shapes, and composition as close as possible. Single subject, clean background.', {
+        // 只有参考图：基于原图特征做拼豆风格化
+        imageUrl = await generateAIImage(colors, '', {
           style: 'cartoon',
           complexity: 'complex',
           referenceImage: referenceImage!,
+          stylizeOnly: true,
         });
       } else {
         // 只有描述：先尝试搜索参考图（针对非自然语言名词如"小八"），找不到再用AI生成
@@ -1141,11 +1142,12 @@ export default function ConsumeBeadsPage() {
           referenceImage: originalReferenceImage, // 传递参考图
         });
       } else if (hasImage) {
-        // 只有参考图：经过 AI 按拼豆风格重绘
-        imageUrl = await generateAIImage(colors, 'Recreate this image faithfully. Keep the original colors, shapes, and composition as close as possible. Single subject, clean background.', {
+        // 只有参考图：基于原图特征做拼豆风格化
+        imageUrl = await generateAIImage(colors, '', {
           style: 'cartoon',
           complexity: 'complex',
           referenceImage: originalReferenceImage!,
+          stylizeOnly: true,
         });
       } else {
         // 只有描述：用AI生成
@@ -1828,32 +1830,45 @@ type Complexity = 'simple' | 'complex';
 async function generateAIImage(
   colors: string[],
   basePrompt: string,
-  options: { style: Style; complexity: Complexity; referenceImage?: string } = { style: 'realistic', complexity: 'simple' }
+  options: { style: Style; complexity: Complexity; referenceImage?: string; stylizeOnly?: boolean } = { style: 'realistic', complexity: 'simple' }
 ): Promise<string> {
-  const { style, complexity, referenceImage } = options;
+  const { style, complexity, referenceImage, stylizeOnly } = options;
   const styleText = style === 'realistic' ? STYLE_REALISTIC : STYLE_CARTOON;
   const colorList = colors.slice(0, 24).join(', ');
   const colorHint =
     complexity === 'simple'
       ? `Available colors (choose only 3–6 that best fit the subject): ${colorList}. Pick the most suitable colors for this image and use only those. Keep the design simple and minimal.`
       : `Use a moderate number of these colors (e.g. 6–10, not too many): ${colorList}. Keep the color palette limited and clean. Avoid using too many different colors—use fewer colors with clear distinction.`;
-  
+
   // 判断是否需要让图案占满画面：描述复杂（长度>50或包含多个词）或颜色选择多（>12种）
   const isComplexDescription = basePrompt.length > 50 || basePrompt.split(/[\s,，、]+/).length > 3;
   const hasManyColors = colors.length > 12;
   const shouldFillFrame = isComplexDescription || hasManyColors;
-  
+
   const sizeHint = shouldFillFrame
     ? `Make the subject large and fill most of the frame (80-90% of the image). Minimize empty space around the subject. `
     : '';
-  
+
   // 自定义生成时（卡通风格），使用更简洁直接的prompt
   const isCustomGeneration = style === 'cartoon' && complexity === 'complex';
-  
+
   // 如果有参考图，构建包含参考图的prompt
   let fullPrompt: string;
-  if (referenceImage) {
-    // 有参考图+描述：以参考图为主，尽量清晰、还原原图颜色，描述仅做微调
+  if (referenceImage && stylizeOnly) {
+    // 纯参考图风格化：严格保留原图特征，简化为拼豆风格
+    fullPrompt = `Generate exactly one image. Do not ask questions or reply with text—output only the image. ` +
+      `You MUST strictly follow the provided reference image. Your task is to SIMPLIFY it into a pixel/perler bead art style while preserving its visual identity. ` +
+      `CRITICAL RULES: ` +
+      `1. Keep the EXACT same subject, pose, proportions, and composition from the reference image. Do NOT change the character or add new elements. ` +
+      `2. Keep the EXACT same color scheme as the reference image. Do NOT change colors unless they are not available in the palette. ` +
+      `3. Simplify details into large, flat color blocks with clear hard edges between colors — suitable for perler bead art (each bead = one solid color). ` +
+      `4. Remove fine textures, gradients, and subtle shading — replace with solid flat fills. ` +
+      `5. Maintain the outline/silhouette shape precisely. ` +
+      `6. White or plain empty background. No border, no frame, no confetti, no scattered dots. ` +
+      `${colorHint} ` +
+      `The output must look like a clean, recognizable, simplified version of the reference — NOT a new creation.`;
+  } else if (referenceImage) {
+    // 有参考图+描述：以参考图为主，按描述微调
     fullPrompt = `Generate exactly one image. Do not ask questions or reply with text—output only the image. ` +
       `${styleText} ` +
       `Use the provided reference image as the base. Keep the main structure, pose, and character design from the reference image. ` +
