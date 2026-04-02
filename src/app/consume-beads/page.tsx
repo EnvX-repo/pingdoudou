@@ -633,7 +633,7 @@ export default function ConsumeBeadsPage() {
         // 生成AI图像
         let imageUrl: string;
         try {
-          imageUrl = await generateAIImage(colors, selectedTemplates[i].prompt, { style, complexity });
+          imageUrl = await generateAIImage(colors, selectedTemplates[i].prompt, { style, complexity, gridSize });
         } catch (error: any) {
           console.error(`生成第${i + 1}套图纸失败:`, error);
           const errorMessage = error.message || '未知错误';
@@ -734,7 +734,7 @@ export default function ConsumeBeadsPage() {
       // 生成AI图像
       let imageUrl: string;
       try {
-        imageUrl = await generateAIImage(colors, randomTemplate.prompt, { style, complexity });
+        imageUrl = await generateAIImage(colors, randomTemplate.prompt, { style, complexity, gridSize });
       } catch (error: any) {
         console.error(`重新生成图纸失败:`, error);
         setGeneratedPatterns(prev => prev.map(p => 
@@ -904,7 +904,8 @@ export default function ConsumeBeadsPage() {
         imageUrl = await generateAIImage(colors, promptForImage, {
           style: 'cartoon',
           complexity: 'complex',
-          referenceImage: referenceImage!, // 传递参考图
+          referenceImage: referenceImage!,
+          gridSize,
         });
       } else if (hasImage) {
         // 只有参考图：基于原图特征做拼豆风格化
@@ -913,6 +914,7 @@ export default function ConsumeBeadsPage() {
           complexity: 'complex',
           referenceImage: referenceImage!,
           stylizeOnly: true,
+          gridSize,
         });
       } else {
         // 只有描述：先尝试搜索参考图（针对非自然语言名词如"小八"），找不到再用AI生成
@@ -994,6 +996,7 @@ export default function ConsumeBeadsPage() {
               const imageUrlRealistic = await generateAIImage(colors, promptForImage, {
                 style: 'realistic',
                 complexity: 'complex',
+                gridSize,
               });
               const patternRealistic = await processImageToPattern(
                 imageUrlRealistic,
@@ -1020,6 +1023,7 @@ export default function ConsumeBeadsPage() {
               const imageUrlCartoon = await generateAIImage(colors, promptForImage, {
                 style: 'cartoon',
                 complexity: 'complex',
+                gridSize,
               });
               const patternCartoon = await processImageToPattern(
                 imageUrlCartoon,
@@ -1048,6 +1052,7 @@ export default function ConsumeBeadsPage() {
           imageUrl = await generateAIImage(colors, promptForImage, {
             style: 'cartoon',
             complexity: 'complex',
+            gridSize,
           });
         }
       }
@@ -1139,7 +1144,8 @@ export default function ConsumeBeadsPage() {
         imageUrl = await generateAIImage(colors, promptForImage, {
           style: 'cartoon',
           complexity: 'complex',
-          referenceImage: originalReferenceImage, // 传递参考图
+          referenceImage: originalReferenceImage,
+          gridSize,
         });
       } else if (hasImage) {
         // 只有参考图：基于原图特征做拼豆风格化
@@ -1148,6 +1154,7 @@ export default function ConsumeBeadsPage() {
           complexity: 'complex',
           referenceImage: originalReferenceImage!,
           stylizeOnly: true,
+          gridSize,
         });
       } else {
         // 只有描述：用AI生成
@@ -1170,6 +1177,7 @@ export default function ConsumeBeadsPage() {
         imageUrl = await generateAIImage(colors, promptForImage, {
           style: 'cartoon',
           complexity: 'complex',
+          gridSize,
         });
       }
       
@@ -1830,7 +1838,7 @@ type Complexity = 'simple' | 'complex';
 async function generateAIImage(
   colors: string[],
   basePrompt: string,
-  options: { style: Style; complexity: Complexity; referenceImage?: string; stylizeOnly?: boolean } = { style: 'realistic', complexity: 'simple' }
+  options: { style: Style; complexity: Complexity; referenceImage?: string; stylizeOnly?: boolean; gridSize?: number } = { style: 'realistic', complexity: 'simple' }
 ): Promise<string> {
   const { style, complexity, referenceImage, stylizeOnly } = options;
   const styleText = style === 'realistic' ? STYLE_REALISTIC : STYLE_CARTOON;
@@ -1840,14 +1848,16 @@ async function generateAIImage(
       ? `Available colors (choose only 3–6 that best fit the subject): ${colorList}. Pick the most suitable colors for this image and use only those. Keep the design simple and minimal.`
       : `Use a moderate number of these colors (e.g. 6–10, not too many): ${colorList}. Keep the color palette limited and clean. Avoid using too many different colors—use fewer colors with clear distinction.`;
 
-  // 判断是否需要让图案占满画面：描述复杂（长度>50或包含多个词）或颜色选择多（>12种）
+  // 判断是否需要让图案占满画面：大格数、描述复杂、或颜色多时都应填满
+  const currentGridSize = options.gridSize || 50;
+  const isLargeGrid = currentGridSize >= 70;
   const isComplexDescription = basePrompt.length > 50 || basePrompt.split(/[\s,，、]+/).length > 3;
   const hasManyColors = colors.length > 12;
-  const shouldFillFrame = isComplexDescription || hasManyColors;
+  const shouldFillFrame = isLargeGrid || isComplexDescription || hasManyColors;
 
   const sizeHint = shouldFillFrame
-    ? `Make the subject large and fill most of the frame (80-90% of the image). Minimize empty space around the subject. `
-    : '';
+    ? `IMPORTANT: Make the subject very large and fill 85-95% of the image area. Leave almost no empty space around the subject. The subject must extend close to all edges. `
+    : `Make the subject fill at least 70% of the image. `;
 
   // 自定义生成时（卡通风格），使用更简洁直接的prompt
   const isCustomGeneration = style === 'cartoon' && complexity === 'complex';
