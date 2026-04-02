@@ -171,7 +171,7 @@ function hexColorDistanceSq(hex1: string, hex2: string): number {
 }
 
 // 将四边相连的”背景色”标记为不填色（external），背景留空
-// 使用 8 连通 + 颜色距离阈值，确保轮廓封闭且清除边缘噪点
+// 使用 4 连通 + 颜色距离阈值：4 连通不会穿过轮廓对角缝隙泄漏到主体内部
 function markBackgroundAsExternal(mappedData: MappedPixel[][], N: number, M: number): MappedPixel[][] {
   const result = mappedData.map(row => row.map(cell => ({ ...cell })));
   const visited = Array(M).fill(null).map(() => Array(N).fill(false));
@@ -198,7 +198,7 @@ function markBackgroundAsExternal(mappedData: MappedPixel[][], N: number, M: num
     hex.toUpperCase() === backgroundColor.toUpperCase() ||
     hexColorDistanceSq(hex, backgroundColor) < BG_DIST_THRESHOLD;
 
-  // 从边框出发，8 连通 flood-fill 相似背景色
+  // 从边框出发，4 连通 flood-fill 相似背景色（不穿过对角缝隙）
   const stack: { r: number; c: number }[] = [];
   for (let i = 0; i < N; i++) {
     if (result[0][i]?.color && isBgColor(result[0][i].color)) stack.push({ r: 0, c: i });
@@ -215,11 +215,53 @@ function markBackgroundAsExternal(mappedData: MappedPixel[][], N: number, M: num
     if (!cell?.color || !isBgColor(cell.color)) continue;
     visited[r][c] = true;
     result[r][c] = { ...transparentColorData };
-    // 8 连通：上下左右 + 四个对角
-    stack.push(
-      { r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 },
-      { r: r - 1, c: c - 1 }, { r: r - 1, c: c + 1 }, { r: r + 1, c: c - 1 }, { r: r + 1, c: c + 1 }
-    );
+    // 4 连通：仅上下左右
+    stack.push({ r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 });
+  }
+  return sealInteriorLeaks(result, mappedData, N, M);
+}
+
+// 封边验证：找到所有不与边框相连的 external 像素群，恢复为原色
+// 防止 flood fill 意外泄漏到主体内部
+function sealInteriorLeaks(
+  data: MappedPixel[][],
+  originalData: MappedPixel[][],
+  N: number,
+  M: number
+): MappedPixel[][] {
+  const result = data.map(row => row.map(cell => ({ ...cell })));
+  const visited = Array(M).fill(null).map(() => Array(N).fill(false));
+
+  // 从边框出发，4 连通遍历所有 external 像素，标记为”确认外部”
+  const stack: { r: number; c: number }[] = [];
+  for (let i = 0; i < N; i++) {
+    if (result[0][i]?.isExternal) stack.push({ r: 0, c: i });
+    if (M > 1 && result[M - 1][i]?.isExternal) stack.push({ r: M - 1, c: i });
+  }
+  for (let j = 0; j < M; j++) {
+    if (result[j][0]?.isExternal) stack.push({ r: j, c: 0 });
+    if (N > 1 && result[j][N - 1]?.isExternal) stack.push({ r: j, c: N - 1 });
+  }
+  while (stack.length > 0) {
+    const { r, c } = stack.pop()!;
+    if (r < 0 || r >= M || c < 0 || c >= N || visited[r][c]) continue;
+    if (!result[r][c]?.isExternal) continue;
+    visited[r][c] = true;
+    stack.push({ r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 });
+  }
+
+  // 任何 external 但没被 visited 的像素 = 被困在主体内部的泄漏，恢复原色
+  let restoredCount = 0;
+  for (let j = 0; j < M; j++) {
+    for (let i = 0; i < N; i++) {
+      if (result[j][i]?.isExternal && !visited[j][i]) {
+        result[j][i] = { ...originalData[j][i], isExternal: false };
+        restoredCount++;
+      }
+    }
+  }
+  if (restoredCount > 0) {
+    console.log(`封边验证：恢复了 ${restoredCount} 个被误标为背景的内部像素`);
   }
   return result;
 }
@@ -2011,8 +2053,10 @@ async function processImageToPattern(
             }
           }
 
-          // 2. 8 连通 flood-fill：从边框出发，用颜色距离阈值将相似背景色标记为 external
+          // 2. 4 连通 flood-fill：从边框出发，用颜色距离阈值将相似背景色标记为 external
+          // 使用 4 连通（不穿过对角缝隙），避免泄漏到主体内部
           const BG_DIST_THRESHOLD = 3600; // RGB 各差 ~35 以内
+          const originalBeforeFlood = mappedData.map(row => row.map(cell => ({ ...cell })));
           if (backgroundColor) {
             const isBgColor = (hex: string) =>
               hex.toUpperCase() === backgroundColor!.toUpperCase() ||
@@ -2036,57 +2080,15 @@ async function processImageToPattern(
               if (!isBgColor(cell.color)) continue;
               visited[r][c] = true;
               mappedData[r][c] = { ...transparentColorData };
-              // 8 连通
-              stack.push(
-                { r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 },
-                { r: r - 1, c: c - 1 }, { r: r - 1, c: c + 1 }, { r: r + 1, c: c - 1 }, { r: r + 1, c: c + 1 }
-              );
+              // 4 连通：仅上下左右
+              stack.push({ r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 });
             }
           }
 
-          // 3. 形态学闭运算：膨胀背景 1px → 收缩 1px，封闭轮廓上的小缺口
-          // 膨胀：如果一个非 external 像素的 8 邻域中有 ≥5 个 external，则标记为 external
-          const dilated = mappedData.map(row => row.map(cell => ({ ...cell })));
-          for (let j = 0; j < M; j++) {
-            for (let i = 0; i < N; i++) {
-              if (mappedData[j][i]?.isExternal) continue;
-              let extCount = 0;
-              for (let dj = -1; dj <= 1; dj++) {
-                for (let di = -1; di <= 1; di++) {
-                  if (dj === 0 && di === 0) continue;
-                  const nj = j + dj, ni = i + di;
-                  if (nj < 0 || nj >= M || ni < 0 || ni >= N || mappedData[nj][ni]?.isExternal) extCount++;
-                }
-              }
-              if (extCount >= 5) {
-                dilated[j][i] = { ...transparentColorData };
-              }
-            }
-          }
-          // 收缩：如果一个 external 像素的 8 邻域中有 ≥5 个非 external（在膨胀前），则恢复原色
-          for (let j = 0; j < M; j++) {
-            for (let i = 0; i < N; i++) {
-              if (!dilated[j][i]?.isExternal) continue;
-              // 只恢复被膨胀新增的像素（原本不是 external 的）
-              if (mappedData[j][i]?.isExternal) continue;
-              let filledCount = 0;
-              for (let dj = -1; dj <= 1; dj++) {
-                for (let di = -1; di <= 1; di++) {
-                  if (dj === 0 && di === 0) continue;
-                  const nj = j + dj, ni = i + di;
-                  if (nj >= 0 && nj < M && ni >= 0 && ni < N && !dilated[nj][ni]?.isExternal) filledCount++;
-                }
-              }
-              if (filledCount >= 5) {
-                dilated[j][i] = { ...mappedData[j][i] };
-              }
-            }
-          }
-          mappedData = dilated;
+          // 3. 封边验证：恢复被误标为背景的内部像素
+          mappedData = sealInteriorLeaks(mappedData, originalBeforeFlood, N, M);
 
-          // 4. 去掉孤立豆子，只保留与主体连通的区域
-          mappedData = removeIsolatedPixels(mappedData, N, M);
-          // 5. 再次去掉散落豆子
+          // 4. 去掉孤立豆子（8 连通），只保留与主体连通的区域
           mappedData = removeIsolatedPixels(mappedData, N, M);
         } else {
           // AI随机生成的图纸：标记背景为 external（不填色）
