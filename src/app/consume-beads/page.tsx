@@ -690,7 +690,7 @@ export default function ConsumeBeadsPage() {
     }
 
     setIsGenerating(false);
-  }, [selectedColors, fullBeadPalette, getRandomTemplates]);
+  }, [selectedColors, fullBeadPalette, getRandomTemplates, gridSize]);
 
   // 重新生成单张AI随机图纸（覆盖当前这张）
   const handleRegenerateSinglePattern = useCallback(async (patternId: number) => {
@@ -767,7 +767,7 @@ export default function ConsumeBeadsPage() {
     } finally {
       setIsGenerating(false);
     }
-  }, [selectedColors, fullBeadPalette, getRandomTemplates, saveToHistory]);
+  }, [selectedColors, fullBeadPalette, getRandomTemplates, saveToHistory, gridSize]);
 
   // 将参考图压缩/缩小，避免请求体过大导致「请求或响应数据过大」报错
   const MAX_REFERENCE_IMAGE_PX = 512;
@@ -1077,7 +1077,7 @@ export default function ConsumeBeadsPage() {
     } finally {
       setIsGeneratingCustom(false);
     }
-  }, [customPromptText, referenceImage, selectedColors, fullBeadPalette]);
+  }, [customPromptText, referenceImage, selectedColors, fullBeadPalette, gridSize]);
 
   // 重新生成自定义图纸（用同样的关键词和参考图，替换当前图纸）
   const handleRegenerateCustom = useCallback(async (originalPrompt: string, currentPatternId: number, originalReferenceImage?: string) => {
@@ -1193,7 +1193,7 @@ export default function ConsumeBeadsPage() {
     } finally {
       setIsGeneratingCustom(false);
     }
-  }, [selectedColors, fullBeadPalette]);
+  }, [selectedColors, fullBeadPalette, gridSize]);
 
   // 处理图片上传
   const handleImageUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1252,7 +1252,7 @@ export default function ConsumeBeadsPage() {
     };
 
     reader.readAsDataURL(file);
-  }, [selectedColors, fullBeadPalette]);
+  }, [selectedColors, fullBeadPalette, gridSize]);
 
   // 打开下载设置弹窗（使用原仓库的下载逻辑）
   const handleDownload = useCallback((pattern: GeneratedPattern) => {
