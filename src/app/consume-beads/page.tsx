@@ -907,8 +907,12 @@ export default function ConsumeBeadsPage() {
           referenceImage: referenceImage!, // 传递参考图
         });
       } else if (hasImage) {
-        // 只有参考图：直接用参考图转拼豆
-        imageUrl = referenceImage!;
+        // 只有参考图：经过 AI 按拼豆风格重绘
+        imageUrl = await generateAIImage(colors, 'Recreate this image faithfully. Keep the original colors, shapes, and composition as close as possible. Single subject, clean background.', {
+          style: 'cartoon',
+          complexity: 'complex',
+          referenceImage: referenceImage!,
+        });
       } else {
         // 只有描述：先尝试搜索参考图（针对非自然语言名词如"小八"），找不到再用AI生成
         // 注意：搜索功能可能不够可靠，如果失败会自动回退到AI生成
@@ -1137,8 +1141,12 @@ export default function ConsumeBeadsPage() {
           referenceImage: originalReferenceImage, // 传递参考图
         });
       } else if (hasImage) {
-        // 只有参考图：直接用参考图转拼豆
-        imageUrl = originalReferenceImage!;
+        // 只有参考图：经过 AI 按拼豆风格重绘
+        imageUrl = await generateAIImage(colors, 'Recreate this image faithfully. Keep the original colors, shapes, and composition as close as possible. Single subject, clean background.', {
+          style: 'cartoon',
+          complexity: 'complex',
+          referenceImage: originalReferenceImage!,
+        });
       } else {
         // 只有描述：用AI生成
         let promptForImage = originalPrompt;
