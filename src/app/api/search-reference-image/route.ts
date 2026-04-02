@@ -4,7 +4,7 @@ import { getEnv } from '../../../utils/hotEnv';
 
 /**
  * 搜索参考图片：当用户输入非自然语言名词（如"小八"）时，联网搜索相关图片URL
- * 返回找到的图片URL，用于后续转成拼豆图
+ * 优先使用 New API 网关，回退到 Google Gemini 直连（含 Google Search）。
  */
 export async function POST(request: NextRequest) {
   try {
@@ -15,19 +15,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '缺少 query 参数' }, { status: 400 });
     }
 
-    const apiKey = getEnv('GOOGLE_API_KEY') || getEnv('GEMINI_API_KEY');
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: '未配置 GOOGLE_API_KEY，无法搜索参考图' },
-        { status: 500 }
-      );
-    }
-
-    const model = getEnv('GEMINI_TEXT_MODEL') || 'gemini-2.0-flash-exp';
-    const baseUrl = getEnv('GOOGLE_API_BASE_URL') || 'https://generativelanguage.googleapis.com/v1beta';
-    const endpoint = `${baseUrl.replace(/\/$/, '')}/models/${model}:generateContent?key=${apiKey}`;
-
-    const searchPrompt = `Search the web for information about "${q}". 
+    const searchPrompt = `Search the web for information about "${q}".
 
 From the search results, find and extract image URLs that show what "${q}" looks like. Look for image URLs in:
 - Wikipedia articles
@@ -43,20 +31,60 @@ Output format:
 
 Output ONLY the image URL or "NO_IMAGE_FOUND", no explanation, no quotes.`;
 
+    // 优先用 New API 网关（OpenAI 兼容格式）
+    const openaiKey = getEnv('OPENAI_API_KEY');
+    const openRouterBase = getEnv('OPENROUTER_BASE_URL');
+
+    if (openaiKey && openRouterBase) {
+      const endpoint = `${openRouterBase.replace(/\/$/, '')}/chat/completions`;
+      // 使用支持搜索的模型
+      const model = getEnv('OPENROUTER_SEARCH_MODEL') || 'gpt-4.1-mini';
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openaiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'user', content: searchPrompt },
+          ],
+          max_tokens: 200,
+          temperature: 0.2,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = data?.choices?.[0]?.message?.content?.trim() || '';
+        const imageUrl = extractImageUrl(text);
+        if (imageUrl) {
+          console.log(`找到参考图(New API): "${q}" → ${imageUrl.substring(0, 100)}...`);
+          return NextResponse.json({ imageUrl, found: true });
+        }
+      }
+      console.warn('New API 搜索未找到图片，尝试回退到 Gemini');
+    }
+
+    // 回退到 Google Gemini 直连（含 Google Search 联网搜索）
+    const googleApiKey = getEnv('GOOGLE_API_KEY') || getEnv('GEMINI_API_KEY');
+    if (!googleApiKey) {
+      return NextResponse.json({ imageUrl: null, found: false });
+    }
+
+    const model = getEnv('GEMINI_TEXT_MODEL') || 'gemini-2.0-flash-exp';
+    const baseUrl = getEnv('GOOGLE_API_BASE_URL') || 'https://generativelanguage.googleapis.com/v1beta';
+    const endpoint = `${baseUrl.replace(/\/$/, '')}/models/${model}:generateContent?key=${googleApiKey}`;
+
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: searchPrompt }] }],
-        tools: [
-          {
-            googleSearchRetrieval: {} // 启用 Google Search 联网搜索
-          }
-        ],
-        generationConfig: {
-          maxOutputTokens: 200,
-          temperature: 0.2,
-        },
+        tools: [{ googleSearchRetrieval: {} }],
+        generationConfig: { maxOutputTokens: 200, temperature: 0.2 },
       }),
       ...(getProxyAgent() ? { dispatcher: getProxyAgent() as any } : {}),
     });
@@ -68,63 +96,27 @@ Output ONLY the image URL or "NO_IMAGE_FOUND", no explanation, no quotes.`;
     }
 
     const data = await response.json();
-    console.log('Gemini search-reference-image 完整响应:', JSON.stringify(data, null, 2).substring(0, 1000));
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
-    console.log('Gemini返回的文本:', text);
-    
-    // 尝试从响应中提取图片URL
-    let imageUrl: string | null = null;
-    
-    // 方法1: 检查响应中是否有图片数据（Gemini可能直接返回图片）
+
+    // 检查是否有 inline 图片数据
     if (data?.candidates?.[0]?.content?.parts) {
       for (const part of data.candidates[0].content.parts) {
         if (part.inlineData && part.inlineData.data) {
-          // 返回base64图像数据
-          imageUrl = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-          console.log('从响应中提取到base64图片');
-          break;
-        }
-        if (part.imageUrl) {
-          imageUrl = part.imageUrl.url;
-          console.log('从响应中提取到图片URL:', imageUrl);
-          break;
+          const imageUrl = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
+          console.log(`找到参考图(Gemini inline): "${q}"`);
+          return NextResponse.json({ imageUrl, found: true });
         }
       }
     }
-    
-    // 方法2: 从文本响应中提取URL（Gemini返回的文字中包含图片链接）
-    if (!imageUrl && text && !text.includes('NO_IMAGE_FOUND')) {
-      // 匹配各种图片URL格式（更宽松的匹配）
-      const urlPatterns = [
-        /https?:\/\/[^\s\)"']+\.(jpg|jpeg|png|gif|webp)(\?[^\s\)"']*)?/gi,
-        /https?:\/\/[^\s\)"']+\.(jpg|jpeg|png|gif|webp)/gi,
-        /https?:\/\/[^\s\)"']+\.(jpg|jpeg|png|gif|webp)/i, // 不区分大小写
-      ];
-      for (const pattern of urlPatterns) {
-        const matches = text.match(pattern);
-        if (matches && matches.length > 0) {
-          // 选择第一个看起来像图片的URL，过滤掉明显不是图片的URL
-          const validUrl = matches.find((url: string) => 
-            url.length > 10 && 
-            !url.includes('wikipedia.org/wiki') && // 排除wiki页面URL
-            !url.includes('google.com/search') // 排除搜索页面URL
-          );
-          if (validUrl) {
-            imageUrl = validUrl;
-            console.log('从文本中提取到图片URL:', imageUrl);
-            break;
-          }
-        }
-      }
+
+    const imageUrl = extractImageUrl(text);
+    if (imageUrl) {
+      console.log(`找到参考图(Gemini): "${q}" → ${imageUrl.substring(0, 100)}...`);
+      return NextResponse.json({ imageUrl, found: true });
     }
-    
-    if (!imageUrl || imageUrl === 'NO_IMAGE_FOUND') {
-      console.log(`未找到参考图: "${q}"`);
-      return NextResponse.json({ imageUrl: null, found: false });
-    }
-    
-    console.log(`找到参考图: "${q}" → ${imageUrl.substring(0, 100)}...`);
-    return NextResponse.json({ imageUrl, found: true });
+
+    console.log(`未找到参考图: "${q}"`);
+    return NextResponse.json({ imageUrl: null, found: false });
   } catch (e: any) {
     console.error('search-reference-image error:', e);
     return NextResponse.json(
@@ -132,4 +124,25 @@ Output ONLY the image URL or "NO_IMAGE_FOUND", no explanation, no quotes.`;
       { status: 500 }
     );
   }
+}
+
+/** 从文本中提取图片 URL */
+function extractImageUrl(text: string): string | null {
+  if (!text || text.includes('NO_IMAGE_FOUND')) return null;
+
+  const urlPatterns = [
+    /https?:\/\/[^\s\)"']+\.(jpg|jpeg|png|gif|webp)(\?[^\s\)"']*)?/gi,
+  ];
+  for (const pattern of urlPatterns) {
+    const matches = text.match(pattern);
+    if (matches && matches.length > 0) {
+      const validUrl = matches.find((url: string) =>
+        url.length > 10 &&
+        !url.includes('wikipedia.org/wiki') &&
+        !url.includes('google.com/search')
+      );
+      if (validUrl) return validUrl;
+    }
+  }
+  return null;
 }

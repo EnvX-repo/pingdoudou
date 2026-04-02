@@ -1047,8 +1047,8 @@ export default function ConsumeBeadsPage() {
         }
       }
       
-      // 有参考图时一律用平均色模式，尽量清晰、还原原图颜色；仅无参考图时用主导色
-      const useAverageMode = hasImage;
+      // 有参考图时用主导色模式（保留原色不混合）；无参考图时用平均色（AI 图更平滑）
+      const useAverageMode = !hasImage;
       
       const pattern = await processImageToPattern(
         imageUrl!,
@@ -1164,7 +1164,7 @@ export default function ConsumeBeadsPage() {
       }
       
       // 判断是否使用平均色模式
-      const useAverageMode = hasImage; // 有参考图时用平均色，尽量还原原图颜色
+      const useAverageMode = !hasImage; // 有参考图时用主导色（保留原色），无参考图用平均色
       
       const pattern = await processImageToPattern(
         imageUrl,
@@ -1233,7 +1233,7 @@ export default function ConsumeBeadsPage() {
           0,
           paletteWithBW,
           colors,
-          { useAverageMode: true, gridSize }
+          { useAverageMode: false, gridSize }
         );
 
         // 替换生成的图纸列表
@@ -1704,7 +1704,12 @@ function PatternCard({
             <canvas
               ref={canvasRef}
               className="border border-gray-300 dark:border-gray-600 rounded"
-              style={{ width: '500px', height: '500px', maxWidth: '100%', imageRendering: 'pixelated' }}
+              style={{
+                width: pattern.gridDimensions.N >= pattern.gridDimensions.M ? '500px' : `${Math.round(500 * pattern.gridDimensions.N / pattern.gridDimensions.M)}px`,
+                height: pattern.gridDimensions.M >= pattern.gridDimensions.N ? '500px' : `${Math.round(500 * pattern.gridDimensions.M / pattern.gridDimensions.N)}px`,
+                maxWidth: '100%',
+                imageRendering: 'pixelated',
+              }}
               title={`${pattern.name} · ${pattern.gridDimensions.N}×${pattern.gridDimensions.M} 格`}
             />
           )}
@@ -1973,11 +1978,26 @@ async function processImageToPattern(
     
     img.onload = () => {
       try {
-        // 将原图统一缩放到固定尺寸，确保每次采样质量一致
-        const STANDARD_SIZE = 1024;
+        // 保持原图比例：长边对应 gridSize 格，短边按比例计算
+        const aspectRatio = img.width / img.height;
+        let N: number, M: number;
+        if (aspectRatio >= 1) {
+          // 横图或正方形
+          N = gridSize;
+          M = Math.max(1, Math.round(gridSize / aspectRatio));
+        } else {
+          // 竖图
+          M = gridSize;
+          N = Math.max(1, Math.round(gridSize * aspectRatio));
+        }
+
+        // 将原图等比缩放到标准化 canvas（每格约 20px，保证采样质量一致）
+        const CELL_PX = 20;
+        const canvasW = N * CELL_PX;
+        const canvasH = M * CELL_PX;
         const canvas = document.createElement('canvas');
-        canvas.width = STANDARD_SIZE;
-        canvas.height = STANDARD_SIZE;
+        canvas.width = canvasW;
+        canvas.height = canvasH;
         const ctx = canvas.getContext('2d');
 
         if (!ctx) {
@@ -1985,23 +2005,22 @@ async function processImageToPattern(
           return;
         }
 
-        // 等比缩放绘制到 1024×1024，居中填充
-        ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, STANDARD_SIZE, STANDARD_SIZE);
+        // 使用高质量缩放，减少插值引入的杂色
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, canvasW, canvasH);
 
-        // 正方形网格，尺寸由用户选择
-        const N = gridSize;
-        const M = gridSize;
-
-        // AI生成和上传图片都用平均色模式（更平滑、更写实），每个格子取区域平均再映射到调色板
+        // 参考图/上传图用主导色模式（保留原色不混合），AI生成图用平均色模式（更平滑）
+        const useAverage = options?.useAverageMode !== false;
+        const mode = useAverage ? PixelationMode.Average : PixelationMode.Dominant;
         const t1FallbackColor = palette.find(p => p.hex.toUpperCase() === '#FFFFFF') || palette[0];
         let mappedData = calculatePixelGrid(
           ctx,
-          STANDARD_SIZE,
-          STANDARD_SIZE,
+          canvasW,
+          canvasH,
           N,
           M,
           palette,
-          PixelationMode.Average, // 统一用 Average 模式，更平滑写实
+          mode,
           t1FallbackColor
         );
         // 检查是否是自定义生成（通过 name 判断）
