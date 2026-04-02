@@ -1704,7 +1704,7 @@ function PatternCard({
             <canvas
               ref={canvasRef}
               className="border border-gray-300 dark:border-gray-600 rounded"
-              style={{ maxWidth: '100%', height: 'auto' }}
+              style={{ width: '500px', height: '500px', maxWidth: '100%', imageRendering: 'pixelated' }}
               title={`${pattern.name} · ${pattern.gridDimensions.N}×${pattern.gridDimensions.M} 格`}
             />
           )}
