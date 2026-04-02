@@ -1931,18 +1931,20 @@ async function processImageToPattern(
     
     img.onload = () => {
       try {
-        // 创建canvas
+        // 将原图统一缩放到固定尺寸，确保每次采样质量一致
+        const STANDARD_SIZE = 1024;
         const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
+        canvas.width = STANDARD_SIZE;
+        canvas.height = STANDARD_SIZE;
         const ctx = canvas.getContext('2d');
-        
+
         if (!ctx) {
           reject(new Error('无法创建canvas上下文'));
           return;
         }
 
-        ctx.drawImage(img, 0, 0);
+        // 等比缩放绘制到 1024×1024，居中填充
+        ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, STANDARD_SIZE, STANDARD_SIZE);
 
         // 正方形网格，尺寸由用户选择
         const N = gridSize;
@@ -1952,8 +1954,8 @@ async function processImageToPattern(
         const t1FallbackColor = palette.find(p => p.hex.toUpperCase() === '#FFFFFF') || palette[0];
         let mappedData = calculatePixelGrid(
           ctx,
-          img.width,
-          img.height,
+          STANDARD_SIZE,
+          STANDARD_SIZE,
           N,
           M,
           palette,
