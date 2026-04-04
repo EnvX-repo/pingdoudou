@@ -416,6 +416,114 @@ function removeIsolatedPixels(mappedData: MappedPixel[][], N: number, M: number)
   return result;
 }
 
+// 边界密封检查：只修复边缘处 **孤立的** 白色/浅色格子（≤3 格的小连通块）
+// 大片连通的白色保留（可能是角色身体/衣服等合法白色区域）
+function sealBoundaryWhiteBlocks(
+  mappedData: MappedPixel[][],
+  N: number,
+  M: number
+): MappedPixel[][] {
+  const result = mappedData.map(row => row.map(cell => ({ ...cell })));
+
+  const isWhitish = (hex: string): boolean => {
+    const h = (hex || '').toUpperCase().replace('#', '');
+    if (h.length !== 6) return false;
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    const luma = r * 0.299 + g * 0.587 + b * 0.114;
+    return luma > 240 || (r + g + b) > 720;
+  };
+
+  const isBoundaryCell = (r: number, c: number): boolean => {
+    if (result[r][c]?.isExternal) return false;
+    const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+    for (const [dr, dc] of dirs) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nr >= M || nc < 0 || nc >= N) return true;
+      if (result[nr][nc]?.isExternal) return true;
+    }
+    return false;
+  };
+
+  // Step 1: 找到所有边缘白色格子
+  const boundaryWhiteCells: { r: number; c: number }[] = [];
+  for (let j = 0; j < M; j++) {
+    for (let i = 0; i < N; i++) {
+      const cell = result[j][i];
+      if (cell && !cell.isExternal && isWhitish(cell.color) && isBoundaryCell(j, i)) {
+        boundaryWhiteCells.push({ r: j, c: i });
+      }
+    }
+  }
+
+  // Step 2: 对这些格子做 4-连通分组，区分"孤立小块"和"大片白色"
+  const visited = new Set<string>();
+  const MAX_ISOLATED_SIZE = 3; // ≤3 格的白色块才算"突兀的孤立块"
+
+  const cellsToFix: { r: number; c: number }[] = [];
+  for (const start of boundaryWhiteCells) {
+    const key = `${start.r},${start.c}`;
+    if (visited.has(key)) continue;
+
+    // BFS 找这个白色格子所在的白色连通区域（只在非 external 白色格子间扩展）
+    const cluster: { r: number; c: number }[] = [];
+    const queue = [start];
+    visited.add(key);
+    while (queue.length > 0) {
+      const { r, c } = queue.shift()!;
+      cluster.push({ r, c });
+      const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+      for (const [dr, dc] of dirs) {
+        const nr = r + dr, nc = c + dc;
+        const nk = `${nr},${nc}`;
+        if (nr < 0 || nr >= M || nc < 0 || nc >= N) continue;
+        if (visited.has(nk)) continue;
+        const ncell = result[nr][nc];
+        if (!ncell || ncell.isExternal || !isWhitish(ncell.color)) continue;
+        visited.add(nk);
+        queue.push({ r: nr, c: nc });
+      }
+    }
+
+    // 只修小块（≤3），大片白色保留
+    if (cluster.length <= MAX_ISOLATED_SIZE) {
+      cellsToFix.push(...cluster);
+    }
+  }
+
+  // Step 3: 对要修复的格子，用周围 5×5 非白非 external 邻居的主色替换
+  let fixedCount = 0;
+  for (const { r, c } of cellsToFix) {
+    const colorCount: Record<string, { count: number; pixel: MappedPixel }> = {};
+    for (let dr = -2; dr <= 2; dr++) {
+      for (let dc = -2; dc <= 2; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nr >= M || nc < 0 || nc >= N) continue;
+        const cell = result[nr][nc];
+        if (!cell || cell.isExternal || isWhitish(cell.color)) continue;
+        const hex = cell.color.toUpperCase();
+        if (!colorCount[hex]) colorCount[hex] = { count: 0, pixel: cell };
+        colorCount[hex].count++;
+      }
+    }
+    let best: { count: number; pixel: MappedPixel } | null = null;
+    for (const entry of Object.values(colorCount)) {
+      if (!best || entry.count > best.count) best = entry;
+    }
+    if (best) {
+      result[r][c] = { key: best.pixel.key, color: best.pixel.color, isExternal: false };
+      fixedCount++;
+    }
+  }
+
+  if (fixedCount > 0) {
+    console.log(`边界密封检查：修复了 ${fixedCount} 个孤立边缘白色块（跳过大片白色区域）`);
+  }
+  return result;
+}
+
 // 确保调色板中始终包含黑色和白色（用于描边、高光等）
 function ensureBlackWhiteInPalette(palette: PaletteColor[]): PaletteColor[] {
   const hasBlack = palette.some(p => p.hex.toUpperCase() === '#000000');
@@ -830,6 +938,98 @@ export default function ConsumeBeadsPage() {
     reader.readAsDataURL(file);
   }, []);
 
+  // 通用流程：直接像素化图片 → 渲染 → AI 颜色分析 → 算法替换
+  // imageUrl: 要像素化的图片, originalImageForAnalysis: AI 分析时对比用的原图
+  const pixelateAndAnalyze = async (
+    imageUrl: string,
+    name: string,
+    id: number,
+    palette: PaletteColor[],
+    colorList: string[],
+    gs: number,
+    originalImageForAnalysis: string
+  ): Promise<GeneratedPattern> => {
+    // Step 1: 直接像素化（主导色模式，保留原色）
+    const directPattern = await processImageToPattern(
+      imageUrl, name, id, palette, colorList,
+      { maxColors: 10, useAverageMode: false, gridSize: gs }
+    );
+
+    // Step 2: 渲染像素化结果为图片
+    let pixelatedImageDataUrl: string | null = null;
+    if (directPattern.mappedData && directPattern.gridDimensions) {
+      const { N, M } = directPattern.gridDimensions;
+      const CELL_PX = 20;
+      const tmpCanvas = document.createElement('canvas');
+      tmpCanvas.width = N * CELL_PX;
+      tmpCanvas.height = M * CELL_PX;
+      const tmpCtx = tmpCanvas.getContext('2d');
+      if (tmpCtx) {
+        for (let j = 0; j < M; j++) {
+          for (let i = 0; i < N; i++) {
+            const cell = directPattern.mappedData[j]?.[i];
+            if (!cell || cell.isExternal) continue;
+            tmpCtx.fillStyle = cell.color;
+            tmpCtx.fillRect(i * CELL_PX, j * CELL_PX, CELL_PX, CELL_PX);
+          }
+        }
+        pixelatedImageDataUrl = tmpCanvas.toDataURL('image/png');
+      }
+    }
+
+    // Step 3: AI 文本模型对比原图和像素化结果，给出颜色替换建议
+    let finalPattern = directPattern;
+    if (pixelatedImageDataUrl && directPattern.mappedData && directPattern.colorCounts) {
+      try {
+        const analyzeRes = await fetch('/api/analyze-color-mapping', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            originalImage: originalImageForAnalysis,
+            pixelatedImage: pixelatedImageDataUrl,
+            palette: colorList,
+            colorCounts: Object.fromEntries(
+              Object.entries(directPattern.colorCounts).map(([hex, info]) => [hex, info.count])
+            ),
+          }),
+        });
+        if (analyzeRes.ok) {
+          const { replacements } = await analyzeRes.json();
+          if (Array.isArray(replacements) && replacements.length > 0) {
+            console.log('AI 颜色替换建议:', replacements);
+            // Step 4: 算法执行全局颜色替换
+            const newMappedData = directPattern.mappedData.map(row =>
+              row.map(cell => {
+                if (!cell || cell.isExternal) return cell;
+                const match = replacements.find(
+                  (r: { from: string; to: string }) => r.from.toUpperCase() === cell.color.toUpperCase()
+                );
+                if (match) {
+                  const toPalette = palette.find(p => p.hex.toUpperCase() === match.to.toUpperCase());
+                  if (toPalette) return { key: toPalette.key, color: toPalette.hex, isExternal: false };
+                }
+                return cell;
+              })
+            );
+            const newColorCounts: { [key: string]: { count: number; color: string } } = {};
+            newMappedData.flat().forEach(cell => {
+              if (cell && !cell.isExternal && cell.color) {
+                const hex = cell.color.toUpperCase();
+                if (!newColorCounts[hex]) newColorCounts[hex] = { count: 0, color: hex };
+                newColorCounts[hex].count++;
+              }
+            });
+            const newTotal = Object.values(newColorCounts).reduce((sum, item) => sum + item.count, 0);
+            finalPattern = { ...directPattern, mappedData: newMappedData, colorCounts: newColorCounts, totalBeadCount: newTotal };
+          }
+        }
+      } catch (e) {
+        console.warn('AI 颜色分析失败，使用直接像素化结果:', e);
+      }
+    }
+    return finalPattern;
+  };
+
   // 用描述与参考图生成一张图纸（描述和参考图都可选）
   const handleGenerateFromCustom = useCallback(async () => {
     const text = customPromptText.trim();
@@ -875,7 +1075,8 @@ export default function ConsumeBeadsPage() {
       let imageUrl: string;
       
       if (hasImage && hasText) {
-        // 有参考图+描述：用AI生成，以参考图为主，根据描述修改（颜色、色调、胖瘦、宽窄等）
+        // 有参考图+描述：先用 AI 生成新图作为新参考图，再走直接像素化流程
+        // Step 1: 翻译/扩展用户描述
         let promptForImage = text;
         try {
           console.log('正在解释用户输入:', text);
@@ -886,36 +1087,42 @@ export default function ConsumeBeadsPage() {
           });
           if (expandRes.ok) {
             const data = await expandRes.json();
-            console.log('解释结果:', data);
             if (data.expanded && typeof data.expanded === 'string' && data.expanded.trim()) {
               promptForImage = data.expanded.trim();
               console.log('使用解释后的描述:', promptForImage);
-            } else {
-              console.warn('解释结果为空，使用原文:', text);
             }
-          } else {
-            const errorData = await expandRes.json().catch(() => ({}));
-            console.warn('解释失败，使用原文:', text, '错误:', errorData);
           }
         } catch (e) {
           console.error('解释接口调用失败，使用原文:', text, e);
         }
-        // 调用AI生成，传递参考图和描述
-        imageUrl = await generateAIImage(colors, promptForImage, {
+        // Step 2: AI 基于参考图+描述生成新图（作为新参考图）
+        const newReferenceUrl = await generateAIImage(colors, promptForImage, {
           style: 'cartoon',
           complexity: 'complex',
           referenceImage: referenceImage!,
           gridSize,
         });
+        // Step 3: 对新参考图走直接像素化 + AI 颜色分析流程
+        const finalPattern = await pixelateAndAnalyze(newReferenceUrl, displayName, customId, paletteWithBW, colors, gridSize, newReferenceUrl);
+        const patternWithPrompt = {
+          ...finalPattern,
+          originalPrompt: text,
+          originalReferenceImage: referenceImage!,
+        };
+        setGeneratedPatterns(prev => prev.map(p => (p.id === customId ? patternWithPrompt : p)));
+        setIsGeneratingCustom(false);
+        return;
       } else if (hasImage) {
-        // 只有参考图：基于原图特征做拼豆风格化
-        imageUrl = await generateAIImage(colors, '', {
-          style: 'cartoon',
-          complexity: 'complex',
-          referenceImage: referenceImage!,
-          stylizeOnly: true,
-          gridSize,
-        });
+        // 只有参考图：直接像素化 → AI 颜色分析 → 算法替换
+        const finalPattern = await pixelateAndAnalyze(referenceImage!, displayName, customId, paletteWithBW, colors, gridSize, referenceImage!);
+        const patternWithPrompt = {
+          ...finalPattern,
+          originalPrompt: '',
+          originalReferenceImage: referenceImage!,
+        };
+        setGeneratedPatterns(prev => prev.map(p => (p.id === customId ? patternWithPrompt : p)));
+        setIsGeneratingCustom(false);
+        return;
       } else {
         // 只有描述：先尝试搜索参考图（针对非自然语言名词如"小八"），找不到再用AI生成
         // 注意：搜索功能可能不够可靠，如果失败会自动回退到AI生成
@@ -2105,16 +2312,22 @@ async function processImageToPattern(
             }
           }
 
-          // 2. 4 连通 flood-fill：从边框出发，用颜色距离阈值将相似背景色标记为 external
-          // 使用 4 连通（不穿过对角缝隙），避免泄漏到主体内部
+          // 2. 基于连通区域大小的背景移除
+          // 核心思路：找到所有与边界相连的同色（背景色）连通区域，
+          // 只有"足够大"的才标记为背景，小块白色保留为主体的一部分。
           const BG_DIST_THRESHOLD = 3600; // RGB 各差 ~35 以内
-          const originalBeforeFlood = mappedData.map(row => row.map(cell => ({ ...cell })));
+          const totalCells = N * M;
+          // 背景区域至少占总格数 10% 才算真正的背景（防止小块白色被误判）
+          const MIN_BG_RATIO = 0.10;
+
           if (backgroundColor) {
             const isBgColor = (hex: string) =>
               hex.toUpperCase() === backgroundColor!.toUpperCase() ||
               hexColorDistanceSq(hex, backgroundColor!) < BG_DIST_THRESHOLD;
 
+            // 从边界出发，找到所有与边界连通的背景色格子
             const visited = Array(M).fill(null).map(() => Array(N).fill(false));
+            const borderConnected: { r: number; c: number }[] = [];
             const stack: { r: number; c: number }[] = [];
             for (let i = 0; i < N; i++) {
               if (mappedData[0]?.[i]?.color && isBgColor(mappedData[0][i].color)) stack.push({ r: 0, c: i });
@@ -2131,22 +2344,32 @@ async function processImageToPattern(
               if (!cell?.color || cell.isExternal) { visited[r][c] = true; continue; }
               if (!isBgColor(cell.color)) continue;
               visited[r][c] = true;
-              mappedData[r][c] = { ...transparentColorData };
-              // 4 连通：仅上下左右
+              borderConnected.push({ r, c });
               stack.push({ r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 });
+            }
+
+            // 只有边界连通区域足够大（>10% 总格数）才标记为背景
+            if (borderConnected.length > totalCells * MIN_BG_RATIO) {
+              for (const { r, c } of borderConnected) {
+                mappedData[r][c] = { ...transparentColorData };
+              }
+              console.log(`背景移除：标记 ${borderConnected.length}/${totalCells} 格为背景`);
+            } else {
+              console.log(`背景区域太小 (${borderConnected.length}/${totalCells})，跳过背景移除`);
             }
           }
 
-          // 3. 封边验证：恢复被误标为背景的内部像素
-          mappedData = sealInteriorLeaks(mappedData, originalBeforeFlood, N, M);
-
-          // 4. 去掉孤立豆子（8 连通），只保留与主体连通的区域
+          // 3. 去掉孤立豆子（8 连通），只保留与主体连通的区域
           mappedData = removeIsolatedPixels(mappedData, N, M);
+          // 4. 边界密封：只修复孤立的（非大片连通的）边缘白色块
+          mappedData = sealBoundaryWhiteBlocks(mappedData, N, M);
         } else {
           // AI随机生成的图纸：标记背景为 external（不填色）
           mappedData = markBackgroundAsExternal(mappedData, N, M);
           // 边缘密封：去掉孤立豆子，只保留与主体连通的区域
           mappedData = removeIsolatedPixels(mappedData, N, M);
+          // 边界密封：修复主体边缘突兀的白色/浅色块
+          mappedData = sealBoundaryWhiteBlocks(mappedData, N, M);
         }
 
         // 统计颜色

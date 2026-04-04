@@ -164,7 +164,7 @@ async function generateWithGoogleGemini(
         }
       });
     }
-    
+
     parts.push({
       text: fullPrompt
     });
