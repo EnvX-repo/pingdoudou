@@ -3,7 +3,7 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { getMardToHexMapping, ColorSystem, colorSystemOptions, getDisplayColorKey } from '../../utils/colorSystemUtils';
 import { hexToRgb, PaletteColor, MappedPixel, calculatePixelGrid, PixelationMode, findClosestPaletteColor } from '../../utils/pixelation';
-import { transparentColorData } from '../../utils/pixelEditingUtils';
+import { transparentColorData, mergeSimilarColors } from '../../utils/pixelEditingUtils';
 import ColorPaletteSelector from '../../components/ConsumeBeads/ColorPaletteSelector';
 import DownloadSettingsModal, { gridLineColorOptions } from '../../components/DownloadSettingsModal';
 import { GridDownloadOptions } from '../../types/downloadTypes';
@@ -85,7 +85,112 @@ interface HistorySnapshot {
   timestamp: number;
 }
 
-// 两种画风：随机二选一；统一强调单一主体、无碎片/彩屑
+// ── 拼豆图纸生成 System Prompt 构建 ──
+
+// 通用核心规则（所有尺寸/类别共用）
+const BEAD_SYSTEM_CORE = `You are a design assistant specialized in generating perler bead (拼豆) pattern artwork.
+Your goal is NOT to create normal illustrations. Instead, you must design images optimized for low-resolution pixelation and real-world bead crafting.
+
+CORE PRINCIPLES:
+1. BEAD-CRAFT FIRST: Think "this will become a physical bead artwork". Design with large flat color blocks, clean hard edges, no fine textures or gradients.
+2. CLEAR SUBJECT: Every image must have one unmistakable main subject. Recognizable at a glance, even at low resolution.
+3. SILHOUETTE OVER DETAIL: Prioritize a strong, complete outline and clear shape. Details serve recognition, not complexity.
+4. CENTERED COMPOSITION: Keep composition tight and focused. Prefer single-subject or one-main-plus-one-accent layout.
+5. PIXEL-FRIENDLY: Design for low-res expression. No realistic photo-feel, no complex perspective, no tiny decorations, no fine lines.
+6. WHITE OR PLAIN BACKGROUND. No border, no frame, no confetti, no scattered dots.
+7. Single subject only. Clean silhouette.`;
+
+// 配色规则
+const BEAD_COLOR_RULES = `
+COLOR USAGE RULES:
+- Do NOT cluster similar colors. Spread hue, value, and saturation across the design.
+- Assign color ROLES: dominant color (sets mood), supporting colors (depth/layers), accent colors (visual spark), dark colors (edges/structure), light colors (highlights/breathing room).
+- The final image must NOT look grey, muddy, dull, or flat. Ensure contrast and vibrancy.
+- If many colors are available, actively increase color diversity while maintaining harmony.`;
+
+// 尺寸特定规则
+function getBeadSizeRules(gridSize: number): string {
+  if (gridSize <= 35) {
+    return `
+SIZE RULES (very small ~${gridSize}×${gridSize}):
+- EXTREME simplicity. Only the most essential visual information.
+- Single subject, ultra-clear silhouette, minimal detail, bold color blocks.
+- Very few color transitions. Maximum recognition with minimum pixels.
+- Think 32×32 pixel icon design.`;
+  } else if (gridSize <= 60) {
+    return `
+SIZE RULES (medium ~${gridSize}×${gridSize} — most common, optimize heavily):
+- Subject fills most of the frame. Single subject or one-main-plus-one-accent.
+- Simple, restrained background. No cluttered small elements.
+- Outline must be prominent. Large color block relationships must be clear.
+- Moderate detail that enhances recognition without creating noise.
+- Goal: recognizable from afar, interesting up close, vibrant colors, looks great when crafted.`;
+  } else if (gridSize <= 85) {
+    return `
+SIZE RULES (medium-large ~${gridSize}×${gridSize}):
+- More layers and supporting elements allowed, but subject must stay clear.
+- Can add decorations, background elements, and structural variety.
+- Still maintain strong focal point.`;
+  } else {
+    return `
+SIZE RULES (large ~${gridSize}×${gridSize}):
+- Can accommodate complex designs with more layers, transitions, and background content.
+- But still maintain bead-craft structure: clear block organization, readable color distribution.
+- Do NOT devolve into normal illustration thinking. Keep pixel-art sensibility.`;
+  }
+}
+
+// 类别特定规则
+function getBeadCategoryRules(categoryName: string): string {
+  if (categoryName.includes('人物')) {
+    return `
+CATEGORY: Characters/People
+- High-recognition characters with distinctive features (hairstyle, outfit, accessories, expression).
+- Vary across: poses, professions, fantasy/retro/cute styles, headshot vs half-body.
+- Clear separation between character and background.
+- Avoid clustering colors around only skin/brown/grey tones.`;
+  } else if (categoryName.includes('风景') || categoryName.includes('场景')) {
+    return `
+CATEGORY: Scenes/Landscapes
+- Simplified bead-friendly small scenes, NOT complex realistic landscapes.
+- Examples: small house, hillside, starry night, garden corner, island, seasonal scene.
+- No complex perspective. One main scene + minimal accents.
+- Clear layers: sky/ground/water/main structure must be distinct.`;
+  } else if (categoryName.includes('游戏') || categoryName.includes('像素')) {
+    return `
+CATEGORY: Gaming/Pixel Art
+- Pixel-art sensibility with high recognition. Strong icon-like quality.
+- Examples: game characters, items, weapons, chests, vehicles, 8-bit/16-bit style objects.
+- Bold outlines, vivid colors, clean shapes.
+- Avoid information-overloaded frames.`;
+  } else if (categoryName.includes('食物')) {
+    return `
+CATEGORY: Food & Drinks
+- Clear silhouette, appetizing appeal.
+- Vary widely: desserts, drinks, sushi, burgers, fruit, festive food, cross-sections.
+- Do NOT default to only yellow/brown/beige/grey. Use cream, sauce, decorations, containers to expand color range.
+- Must look appetizing and complete.`;
+  } else if (categoryName.includes('植物')) {
+    return `
+CATEGORY: Plants & Botanical
+- Decorative, clear-outlined plant designs.
+- Vary: bouquets, single flowers, potted plants, mushrooms, fruit trees, seasonal plants.
+- Do NOT use only similar greens. Add flower colors, fruit, pots, backgrounds for variety.
+- Balance natural feel with visual interest.`;
+  } else if (categoryName.includes('物品') || categoryName.includes('日常')) {
+    return `
+CATEGORY: Everyday Objects
+- Cute, recognizable objects with clean shapes.
+- Examples: cameras, phones, stars, hearts, accessories, stationery, instruments.
+- Icon-like quality, bold and simple.`;
+  }
+  return `
+CATEGORY: General
+- Clear subject with high recognition, suitable for bead craft.
+- Strong silhouette, clean color blocks, centered composition.`;
+}
+
+// 两种画风
 const NO_FRAGMENTS =
   ' Single subject only. No confetti, no scattered dots, no fragments or specks around the subject. Clean silhouette on plain background.';
 const STYLE_REALISTIC =
@@ -404,35 +509,131 @@ function removeIsolatedPixels(mappedData: MappedPixel[][], N: number, M: number)
     }
   }
   if (components.length <= 1) return result;
-  const largest = components.reduce((a, b) => (a.length >= b.length ? a : b));
-  const inLargest = new Set(largest.map(p => `${p.r},${p.c}`));
+  // 保留所有"足够大"的连通块，只移除碎小噪点
+  // 阈值：总非 external 格数的 1%，最小 3 格
+  const totalFilled = components.reduce((sum, comp) => sum + comp.length, 0);
+  const minComponentSize = Math.max(3, Math.floor(totalFilled * 0.01));
+  const keepSet = new Set<string>();
+  for (const comp of components) {
+    if (comp.length >= minComponentSize) {
+      for (const p of comp) keepSet.add(`${p.r},${p.c}`);
+    }
+  }
+  let removedCount = 0;
   for (let j = 0; j < M; j++) {
     for (let i = 0; i < N; i++) {
-      if (result[j][i] && !result[j][i].isExternal && !inLargest.has(`${j},${i}`)) {
+      if (result[j][i] && !result[j][i].isExternal && !keepSet.has(`${j},${i}`)) {
         result[j][i] = { ...transparentColorData };
+        removedCount++;
       }
     }
+  }
+  if (removedCount > 0) {
+    console.log(`去孤立：移除了 ${removedCount} 个格子（保留阈值=${minComponentSize}格）`);
   }
   return result;
 }
 
-// 边界密封检查：只修复边缘处 **孤立的** 白色/浅色格子（≤3 格的小连通块）
-// 大片连通的白色保留（可能是角色身体/衣服等合法白色区域）
-function sealBoundaryWhiteBlocks(
+// 边界腐蚀：移除主体边缘一圈中颜色与内侧邻居差异过大的格子
+// 原理：采样平滑会在背景色和轮廓线交界处产生混合色（如粉+黑=深粉），
+// 这些混合色逃过了 flood fill，残留在主体边缘形成"怪边界"。
+// 通过比较边缘格子和其内侧邻居的颜色差异，把差异过大的格子腐蚀掉。
+function erodeBoundaryArtifacts(
   mappedData: MappedPixel[][],
   N: number,
   M: number
 ): MappedPixel[][] {
   const result = mappedData.map(row => row.map(cell => ({ ...cell })));
+  const ERODE_DIST_THRESHOLD = 8000; // 颜色距离阈值（约 RGB 各差 ~52）
 
-  const isWhitish = (hex: string): boolean => {
+  let erodedCount = 0;
+  for (let j = 0; j < M; j++) {
+    for (let i = 0; i < N; i++) {
+      const cell = result[j][i];
+      if (!cell || cell.isExternal) continue;
+
+      // 判断是否为边界格子
+      const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+      let isBoundary = false;
+      for (const [dr, dc] of dirs) {
+        const nr = j + dr, nc = i + dc;
+        if (nr < 0 || nr >= M || nc < 0 || nc >= N || result[nr]?.[nc]?.isExternal) {
+          isBoundary = true;
+          break;
+        }
+      }
+      if (!isBoundary) continue;
+
+      // 收集内侧邻居（非 external、非边界的邻居）的颜色
+      const innerColors: string[] = [];
+      for (const [dr, dc] of dirs) {
+        const nr = j + dr, nc = i + dc;
+        if (nr < 0 || nr >= M || nc < 0 || nc >= N) continue;
+        const neighbor = result[nr][nc];
+        if (!neighbor || neighbor.isExternal) continue;
+        // 这个邻居本身也是边界吗？跳过，只看更内侧的
+        let neighborIsBoundary = false;
+        for (const [dr2, dc2] of dirs) {
+          const nnr = nr + dr2, nnc = nc + dc2;
+          if (nnr < 0 || nnr >= M || nnc < 0 || nnc >= N || result[nnr]?.[nnc]?.isExternal) {
+            neighborIsBoundary = true;
+            break;
+          }
+        }
+        if (!neighborIsBoundary) {
+          innerColors.push(neighbor.color);
+        }
+      }
+
+      if (innerColors.length === 0) continue;
+
+      // 计算边缘格子与内侧邻居的最小颜色距离
+      let minDistToInner = Infinity;
+      for (const innerHex of innerColors) {
+        const dist = hexColorDistanceSq(cell.color, innerHex);
+        if (dist < minDistToInner) minDistToInner = dist;
+      }
+
+      // 如果与所有内侧邻居都差异很大，说明是混合色伪影，腐蚀掉
+      if (minDistToInner > ERODE_DIST_THRESHOLD) {
+        result[j][i] = { ...transparentColorData };
+        erodedCount++;
+      }
+    }
+  }
+
+  if (erodedCount > 0) {
+    console.log(`边界腐蚀：移除了 ${erodedCount} 个边缘混合色格子`);
+  }
+  return result;
+}
+
+// 边界密封检查：修复边缘处孤立的"不属于主体"的格子（≤3 格的小连通块）
+// 检测两类问题：1) 突兀白色/浅色  2) 背景色残留（如粉色背景渗入白色主体边缘）
+function sealBoundaryWhiteBlocks(
+  mappedData: MappedPixel[][],
+  N: number,
+  M: number,
+  detectedBgColor?: string | null
+): MappedPixel[][] {
+  const result = mappedData.map(row => row.map(cell => ({ ...cell })));
+
+  // 判断是否为"边缘异常色"：白色/极浅色 或 与已知背景色相似
+  const isAnomalousEdgeColor = (hex: string): boolean => {
     const h = (hex || '').toUpperCase().replace('#', '');
     if (h.length !== 6) return false;
     const r = parseInt(h.slice(0, 2), 16);
     const g = parseInt(h.slice(2, 4), 16);
     const b = parseInt(h.slice(4, 6), 16);
+    // 白色/极浅色
     const luma = r * 0.299 + g * 0.587 + b * 0.114;
-    return luma > 240 || (r + g + b) > 720;
+    if (luma > 240 || (r + g + b) > 720) return true;
+    // 与已知背景色相似（距离 < 4000，约 RGB 各差 ~37）
+    if (detectedBgColor) {
+      const dist = hexColorDistanceSq(hex, detectedBgColor);
+      if (dist < 4000) return true;
+    }
+    return false;
   };
 
   const isBoundaryCell = (r: number, c: number): boolean => {
@@ -451,7 +652,7 @@ function sealBoundaryWhiteBlocks(
   for (let j = 0; j < M; j++) {
     for (let i = 0; i < N; i++) {
       const cell = result[j][i];
-      if (cell && !cell.isExternal && isWhitish(cell.color) && isBoundaryCell(j, i)) {
+      if (cell && !cell.isExternal && isAnomalousEdgeColor(cell.color) && isBoundaryCell(j, i)) {
         boundaryWhiteCells.push({ r: j, c: i });
       }
     }
@@ -480,7 +681,7 @@ function sealBoundaryWhiteBlocks(
         if (nr < 0 || nr >= M || nc < 0 || nc >= N) continue;
         if (visited.has(nk)) continue;
         const ncell = result[nr][nc];
-        if (!ncell || ncell.isExternal || !isWhitish(ncell.color)) continue;
+        if (!ncell || ncell.isExternal || !isAnomalousEdgeColor(ncell.color)) continue;
         visited.add(nk);
         queue.push({ r: nr, c: nc });
       }
@@ -492,9 +693,26 @@ function sealBoundaryWhiteBlocks(
     }
   }
 
-  // Step 3: 对要修复的格子，用周围 5×5 非白非 external 邻居的主色替换
+  // 判断是否与背景色相似（用于区分"背景残留"和"白色异常"）
+  const isBgColorLike = (hex: string): boolean => {
+    if (!detectedBgColor) return false;
+    return hexColorDistanceSq(hex, detectedBgColor) < 4000;
+  };
+
+  // Step 3: 修复
+  // - 背景色残留 → 标为 external（移除，不要让主体外溢）
+  // - 白色/浅色孤立块 → 替换成邻居主色（密封边界）
   let fixedCount = 0;
+  let removedCount = 0;
   for (const { r, c } of cellsToFix) {
+    // 如果是背景色残留，直接标为 external
+    if (isBgColorLike(result[r][c].color)) {
+      result[r][c] = { ...transparentColorData };
+      removedCount++;
+      continue;
+    }
+
+    // 否则是白色/浅色孤立块，替换成邻居主色
     const colorCount: Record<string, { count: number; pixel: MappedPixel }> = {};
     for (let dr = -2; dr <= 2; dr++) {
       for (let dc = -2; dc <= 2; dc++) {
@@ -502,7 +720,7 @@ function sealBoundaryWhiteBlocks(
         const nr = r + dr, nc = c + dc;
         if (nr < 0 || nr >= M || nc < 0 || nc >= N) continue;
         const cell = result[nr][nc];
-        if (!cell || cell.isExternal || isWhitish(cell.color)) continue;
+        if (!cell || cell.isExternal || isAnomalousEdgeColor(cell.color)) continue;
         const hex = cell.color.toUpperCase();
         if (!colorCount[hex]) colorCount[hex] = { count: 0, pixel: cell };
         colorCount[hex].count++;
@@ -519,7 +737,72 @@ function sealBoundaryWhiteBlocks(
   }
 
   if (fixedCount > 0) {
-    console.log(`边界密封检查：修复了 ${fixedCount} 个孤立边缘白色块（跳过大片白色区域）`);
+    console.log(`边界密封检查：替换了 ${fixedCount} 个孤立浅色块，移除了 ${removedCount} 个背景色残留（跳过大片连通区域）`);
+  }
+  return result;
+}
+
+// 间隙填充：填补主体轮廓中 1 格宽的小缺口
+// 原理：如果一个 external 格子被 3 个或以上的非 external 4-连通邻居包围，
+// 说明它是主体轮廓中的一个小缺口，用出现最多的邻居颜色填上。
+// 多轮执行以处理连续的窄缝隙。
+function fillBoundaryGaps(
+  mappedData: MappedPixel[][],
+  N: number,
+  M: number
+): MappedPixel[][] {
+  const result = mappedData.map(row => row.map(cell => ({ ...cell })));
+  const MAX_PASSES = 2; // 最多 2 轮，防止过度填充
+  let totalFilled = 0;
+
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const cellsToFill: { r: number; c: number; color: MappedPixel }[] = [];
+
+    for (let j = 0; j < M; j++) {
+      for (let i = 0; i < N; i++) {
+        const cell = result[j][i];
+        if (!cell?.isExternal) continue;
+
+        // 统计 4-连通邻居中非 external 的数量和颜色
+        const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+        const neighborColors: Record<string, { count: number; pixel: MappedPixel }> = {};
+        let filledNeighbors = 0;
+
+        for (const [dr, dc] of dirs) {
+          const nr = j + dr, nc = i + dc;
+          if (nr < 0 || nr >= M || nc < 0 || nc >= N) continue;
+          const neighbor = result[nr][nc];
+          if (neighbor && !neighbor.isExternal) {
+            filledNeighbors++;
+            const hex = neighbor.color.toUpperCase();
+            if (!neighborColors[hex]) neighborColors[hex] = { count: 0, pixel: neighbor };
+            neighborColors[hex].count++;
+          }
+        }
+
+        // 3 个或以上非 external 邻居 → 这是一个缺口，填上
+        if (filledNeighbors >= 3) {
+          let best: { count: number; pixel: MappedPixel } | null = null;
+          for (const entry of Object.values(neighborColors)) {
+            if (!best || entry.count > best.count) best = entry;
+          }
+          if (best) {
+            cellsToFill.push({ r: j, c: i, color: best.pixel });
+          }
+        }
+      }
+    }
+
+    if (cellsToFill.length === 0) break;
+
+    for (const { r, c, color } of cellsToFill) {
+      result[r][c] = { key: color.key, color: color.color, isExternal: false };
+    }
+    totalFilled += cellsToFill.length;
+  }
+
+  if (totalFilled > 0) {
+    console.log(`间隙填充：填补了 ${totalFilled} 个轮廓缺口`);
   }
   return result;
 }
@@ -741,7 +1024,7 @@ export default function ConsumeBeadsPage() {
         // 生成AI图像
         let imageUrl: string;
         try {
-          imageUrl = await generateAIImage(colors, selectedTemplates[i].prompt, { style, complexity, gridSize });
+          imageUrl = await generateAIImage(colors, selectedTemplates[i].prompt, { style, complexity, gridSize, categoryName: selectedTemplates[i].name });
         } catch (error: any) {
           console.error(`生成第${i + 1}套图纸失败:`, error);
           const errorMessage = error.message || '未知错误';
@@ -842,7 +1125,7 @@ export default function ConsumeBeadsPage() {
       // 生成AI图像
       let imageUrl: string;
       try {
-        imageUrl = await generateAIImage(colors, randomTemplate.prompt, { style, complexity, gridSize });
+        imageUrl = await generateAIImage(colors, randomTemplate.prompt, { style, complexity, gridSize, categoryName: randomTemplate.name });
       } catch (error: any) {
         console.error(`重新生成图纸失败:`, error);
         setGeneratedPatterns(prev => prev.map(p => 
@@ -950,9 +1233,11 @@ export default function ConsumeBeadsPage() {
     originalImageForAnalysis: string
   ): Promise<GeneratedPattern> => {
     // Step 1: 直接像素化（主导色模式，保留原色）
+    // 小尺寸下放宽颜色上限：格数少时需要更多颜色来表达细节
+    const effectiveMaxColors = gs <= 60 ? 15 : 10;
     const directPattern = await processImageToPattern(
       imageUrl, name, id, palette, colorList,
-      { maxColors: 10, useAverageMode: false, gridSize: gs }
+      { maxColors: effectiveMaxColors, useAverageMode: true, gridSize: gs, isReferenceImage: true }
     );
 
     // Step 2: 渲染像素化结果为图片
@@ -977,7 +1262,7 @@ export default function ConsumeBeadsPage() {
       }
     }
 
-    // Step 3: AI 文本模型对比原图和像素化结果，给出颜色替换建议
+    // Step 3: AI 文本模型对比原图和像素化结果，给出全局替换 + 边界修正建议
     let finalPattern = directPattern;
     if (pixelatedImageDataUrl && directPattern.mappedData && directPattern.colorCounts) {
       try {
@@ -994,11 +1279,13 @@ export default function ConsumeBeadsPage() {
           }),
         });
         if (analyzeRes.ok) {
-          const { replacements } = await analyzeRes.json();
+          const { replacements, boundaryFixes } = await analyzeRes.json();
+          let workingData = directPattern.mappedData;
+
+          // Step 4a: 全局颜色替换
           if (Array.isArray(replacements) && replacements.length > 0) {
-            console.log('AI 颜色替换建议:', replacements);
-            // Step 4: 算法执行全局颜色替换
-            const newMappedData = directPattern.mappedData.map(row =>
+            console.log('AI 全局颜色替换:', replacements);
+            workingData = workingData.map(row =>
               row.map(cell => {
                 if (!cell || cell.isExternal) return cell;
                 const match = replacements.find(
@@ -1011,8 +1298,40 @@ export default function ConsumeBeadsPage() {
                 return cell;
               })
             );
+          }
+
+          // Step 4b: 边界专用修正（只替换边缘格子）
+          if (Array.isArray(boundaryFixes) && boundaryFixes.length > 0) {
+            console.log('AI 边界修正:', boundaryFixes);
+            const dims = directPattern.gridDimensions!;
+            workingData = workingData.map((row, j) =>
+              row.map((cell, i) => {
+                if (!cell || cell.isExternal) return cell;
+                // 判断是否为边界格子（4-连通邻居中有 external）
+                const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+                const isBoundary = dirs.some(([dr, dc]) => {
+                  const nr = j + dr, nc = i + dc;
+                  if (nr < 0 || nr >= dims.M || nc < 0 || nc >= dims.N) return true;
+                  return workingData[nr]?.[nc]?.isExternal === true;
+                });
+                if (!isBoundary) return cell;
+
+                const match = boundaryFixes.find(
+                  (r: { from: string; to: string }) => r.from.toUpperCase() === cell.color.toUpperCase()
+                );
+                if (match) {
+                  const toPalette = palette.find(p => p.hex.toUpperCase() === match.to.toUpperCase());
+                  if (toPalette) return { key: toPalette.key, color: toPalette.hex, isExternal: false };
+                }
+                return cell;
+              })
+            );
+          }
+
+          // 重新统计颜色
+          if ((replacements?.length > 0) || (boundaryFixes?.length > 0)) {
             const newColorCounts: { [key: string]: { count: number; color: string } } = {};
-            newMappedData.flat().forEach(cell => {
+            workingData.flat().forEach(cell => {
               if (cell && !cell.isExternal && cell.color) {
                 const hex = cell.color.toUpperCase();
                 if (!newColorCounts[hex]) newColorCounts[hex] = { count: 0, color: hex };
@@ -1020,7 +1339,7 @@ export default function ConsumeBeadsPage() {
               }
             });
             const newTotal = Object.values(newColorCounts).reduce((sum, item) => sum + item.count, 0);
-            finalPattern = { ...directPattern, mappedData: newMappedData, colorCounts: newColorCounts, totalBeadCount: newTotal };
+            finalPattern = { ...directPattern, mappedData: workingData, colorCounts: newColorCounts, totalBeadCount: newTotal };
           }
         }
       } catch (e) {
@@ -1451,14 +1770,14 @@ export default function ConsumeBeadsPage() {
         const activePalette = fullBeadPalette.filter(c => selectedColors.has(c.hex));
         const paletteWithBW = autoIncludeBlackWhite ? ensureBlackWhiteInPalette(activePalette) : activePalette;
 
-        // 上传图片：用当前选择的颜色还原图片，尽量贴近原图（平均色模式）
+        // 上传图片：用参考图策略处理（平滑 + Average，JPEG 友好）
         const pattern = await processImageToPattern(
           imageUrl,
           '上传的图片',
           0,
           paletteWithBW,
           colors,
-          { useAverageMode: false, gridSize }
+          { useAverageMode: true, gridSize, isReferenceImage: true }
         );
 
         // 替换生成的图纸列表
@@ -1921,18 +2240,35 @@ function PatternCard({
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
-      <div className="flex flex-col md:flex-row gap-6">
-        {/* 图纸（带网格，仅此一张） */}
-        <div className="flex-shrink-0">
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 sm:p-6">
+      <div className="flex flex-col md:flex-row gap-4 sm:gap-6">
+        {/* AI 调整后的参考图（有参考图时展示） */}
+        {pattern.imageUrl && pattern.originalPrompt && (
+          <div className="w-full md:w-auto flex justify-center">
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1 text-center">
+                {pattern.originalPrompt.trim() ? 'AI 生成参考图' : 'AI 风格化参考图'}
+              </p>
+              <img
+                src={pattern.imageUrl}
+                alt="AI 调整后的参考图"
+                className="border border-gray-300 dark:border-gray-600 rounded object-contain bg-white max-w-full"
+                style={{ width: '150px', height: '150px' }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 图纸（带网格） */}
+        <div className="w-full md:w-auto flex justify-center">
           {pattern.mappedData && pattern.gridDimensions && (
             <canvas
               ref={canvasRef}
               className="border border-gray-300 dark:border-gray-600 rounded"
               style={{
-                width: pattern.gridDimensions.N >= pattern.gridDimensions.M ? '500px' : `${Math.round(500 * pattern.gridDimensions.N / pattern.gridDimensions.M)}px`,
-                height: pattern.gridDimensions.M >= pattern.gridDimensions.N ? '500px' : `${Math.round(500 * pattern.gridDimensions.M / pattern.gridDimensions.N)}px`,
-                maxWidth: '100%',
+                width: '100%',
+                maxWidth: pattern.gridDimensions.N >= pattern.gridDimensions.M ? '500px' : `${Math.round(500 * pattern.gridDimensions.N / pattern.gridDimensions.M)}px`,
+                aspectRatio: `${pattern.gridDimensions.N} / ${pattern.gridDimensions.M}`,
                 imageRendering: 'pixelated',
               }}
               title={`${pattern.name} · ${pattern.gridDimensions.N}×${pattern.gridDimensions.M} 格`}
@@ -2045,9 +2381,9 @@ type Complexity = 'simple' | 'complex';
 async function generateAIImage(
   colors: string[],
   basePrompt: string,
-  options: { style: Style; complexity: Complexity; referenceImage?: string; stylizeOnly?: boolean; gridSize?: number } = { style: 'realistic', complexity: 'simple' }
+  options: { style: Style; complexity: Complexity; referenceImage?: string; stylizeOnly?: boolean; gridSize?: number; categoryName?: string } = { style: 'realistic', complexity: 'simple' }
 ): Promise<string> {
-  const { style, complexity, referenceImage, stylizeOnly } = options;
+  const { style, complexity, referenceImage, stylizeOnly, categoryName } = options;
   const styleText = style === 'realistic' ? STYLE_REALISTIC : STYLE_CARTOON;
   const colorList = colors.slice(0, 24).join(', ');
   const colorHint =
@@ -2055,7 +2391,6 @@ async function generateAIImage(
       ? `Available colors (choose only 3–6 that best fit the subject): ${colorList}. Pick the most suitable colors for this image and use only those. Keep the design simple and minimal.`
       : `Use a moderate number of these colors (e.g. 6–10, not too many): ${colorList}. Keep the color palette limited and clean. Avoid using too many different colors—use fewer colors with clear distinction.`;
 
-  // 判断是否需要让图案占满画面：大格数、描述复杂、或颜色多时都应填满
   const currentGridSize = options.gridSize || 50;
   const isLargeGrid = currentGridSize >= 70;
   const isComplexDescription = basePrompt.length > 50 || basePrompt.split(/[\s,，、]+/).length > 3;
@@ -2065,6 +2400,11 @@ async function generateAIImage(
   const sizeHint = shouldFillFrame
     ? `IMPORTANT: Make the subject very large and fill 85-95% of the image area. Leave almost no empty space around the subject. The subject must extend close to all edges. `
     : `Make the subject fill at least 70% of the image. `;
+
+  // 拼豆专用 system prompt：核心规则 + 配色规则 + 尺寸规则 + 类别规则
+  const beadSystemPrompt = BEAD_SYSTEM_CORE + BEAD_COLOR_RULES +
+    getBeadSizeRules(currentGridSize) +
+    (categoryName ? getBeadCategoryRules(categoryName) : '');
 
   // 自定义生成时（卡通风格），使用更简洁直接的prompt
   const isCustomGeneration = style === 'cartoon' && complexity === 'complex';
@@ -2085,8 +2425,9 @@ async function generateAIImage(
       `${colorHint} ` +
       `The output must look like a clean, recognizable, simplified version of the reference — NOT a new creation.`;
   } else if (referenceImage) {
-    // 有参考图+描述：以参考图为主，按描述微调
-    fullPrompt = `Generate exactly one image. Do not ask questions or reply with text—output only the image. ` +
+    // 有参考图+描述：以参考图为主，按描述微调（加入拼豆 system 规则）
+    fullPrompt = `${beadSystemPrompt}\n\n` +
+      `Generate exactly one image. Do not ask questions or reply with text—output only the image. ` +
       `${styleText} ` +
       `Use the provided reference image as the base. Keep the main structure, pose, and character design from the reference image. ` +
       `Preserve the original colors of the reference image as much as possible—output should be clear and color-accurate to the reference. ` +
@@ -2096,16 +2437,20 @@ async function generateAIImage(
       `${sizeHint}` +
       `Make the image sharp, clear, and suitable for perler bead art. Do NOT add any border, frame, or colored outline. No confetti, no scattered dots.`;
   } else if (isCustomGeneration) {
-    fullPrompt = `Generate exactly one image. Do not ask questions or reply with text—output only the image. ` +
+    // 自定义描述生成（加入拼豆 system 规则）
+    fullPrompt = `${beadSystemPrompt}\n\n` +
+      `Generate exactly one image. Do not ask questions or reply with text—output only the image. ` +
       `${styleText} ` +
       `Draw: ${basePrompt}. ` +
       `${colorHint} ` +
       `${sizeHint}` +
       `Make it very cute, recognizable, and suitable for perler bead art. Do NOT add any border, frame, or colored outline around the image. No confetti, no scattered dots.`;
   } else {
-    fullPrompt = `Generate exactly one image. Do not ask questions or reply with text—output only the image. ` +
-      `Reference: one clear, iconic image of the subject (like a clean character reference or sticker). ` +
-      `${styleText} Subject: ${basePrompt}. ${colorHint} ` +
+    // 随机生成（加入拼豆 system 规则——最核心的使用场景）
+    fullPrompt = `${beadSystemPrompt}\n\n` +
+      `Generate exactly one image. Do not ask questions or reply with text—output only the image. ` +
+      `${styleText} Subject: ${basePrompt}. ` +
+      `${colorHint} ` +
       `${sizeHint}` +
       `Use high contrast colors and clear edges between color areas. Do NOT add any border, frame, or outline around the image—no blue or colored rim. ` +
       `No confetti, no scattered beads or dots around the figure.`;
@@ -2208,7 +2553,7 @@ async function processImageToPattern(
   id: number,
   palette: PaletteColor[],
   selectedColors: string[],
-  options?: { useAverageMode?: boolean; maxColors?: number; gridSize?: number }
+  options?: { useAverageMode?: boolean; maxColors?: number; gridSize?: number; isReferenceImage?: boolean }
 ): Promise<GeneratedPattern> {
   const maxColors = options?.maxColors;
   const gridSize = options?.gridSize || 50;
@@ -2231,7 +2576,92 @@ async function processImageToPattern(
           N = Math.max(1, Math.round(gridSize * aspectRatio));
         }
 
-        // 将原图等比缩放到标准化 canvas（每格约 20px，保证采样质量一致）
+        // 自动裁剪：检测主体区域，裁剪掉多余背景，让主体尽量占满网格
+        // 先用一个小型采样 canvas 快速找到非背景区域的边界框
+        let srcX = 0, srcY = 0, srcW = img.width, srcH = img.height;
+        try {
+          const SAMPLE_SIZE = 200; // 采样分辨率
+          const sampleCanvas = document.createElement('canvas');
+          const sScale = Math.min(SAMPLE_SIZE / img.width, SAMPLE_SIZE / img.height, 1);
+          const sW = Math.round(img.width * sScale);
+          const sH = Math.round(img.height * sScale);
+          sampleCanvas.width = sW;
+          sampleCanvas.height = sH;
+          const sCtx = sampleCanvas.getContext('2d');
+          if (sCtx) {
+            sCtx.drawImage(img, 0, 0, sW, sH);
+            const sData = sCtx.getImageData(0, 0, sW, sH).data;
+
+            // 检测边框最多的颜色作为背景色（采样 4 条边）
+            const borderPixels: string[] = [];
+            for (let x = 0; x < sW; x++) {
+              for (const y of [0, sH - 1]) {
+                const idx = (y * sW + x) * 4;
+                borderPixels.push(`${sData[idx]},${sData[idx + 1]},${sData[idx + 2]}`);
+              }
+            }
+            for (let y = 0; y < sH; y++) {
+              for (const x of [0, sW - 1]) {
+                const idx = (y * sW + x) * 4;
+                borderPixels.push(`${sData[idx]},${sData[idx + 1]},${sData[idx + 2]}`);
+              }
+            }
+            // 找出现最多的边框颜色
+            const freq: Record<string, number> = {};
+            borderPixels.forEach(c => { freq[c] = (freq[c] || 0) + 1; });
+            const bgRgbStr = Object.entries(freq).sort((a, b) => b[1] - a[1])[0]?.[0];
+
+            if (bgRgbStr) {
+              const [bgR, bgG, bgB] = bgRgbStr.split(',').map(Number);
+              const CROP_DIST = 3600; // 裁剪用的颜色距离阈值
+
+              // 找非背景像素的边界框
+              let minX = sW, minY = sH, maxX = 0, maxY = 0;
+              for (let y = 0; y < sH; y++) {
+                for (let x = 0; x < sW; x++) {
+                  const idx = (y * sW + x) * 4;
+                  const dr = sData[idx] - bgR, dg = sData[idx + 1] - bgG, db = sData[idx + 2] - bgB;
+                  if (dr * dr + dg * dg + db * db > CROP_DIST) {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                  }
+                }
+              }
+
+              if (maxX > minX && maxY > minY) {
+                // 加一点边距（5%），防止裁太紧
+                const pad = Math.max(2, Math.round(Math.max(maxX - minX, maxY - minY) * 0.05));
+                minX = Math.max(0, minX - pad);
+                minY = Math.max(0, minY - pad);
+                maxX = Math.min(sW - 1, maxX + pad);
+                maxY = Math.min(sH - 1, maxY + pad);
+
+                // 换算回原图坐标
+                srcX = Math.round(minX / sScale);
+                srcY = Math.round(minY / sScale);
+                srcW = Math.round((maxX - minX + 1) / sScale);
+                srcH = Math.round((maxY - minY + 1) / sScale);
+
+                // 用裁剪后的宽高比重新计算网格尺寸
+                const croppedAspect = srcW / srcH;
+                if (croppedAspect >= 1) {
+                  N = gridSize;
+                  M = Math.max(1, Math.round(gridSize / croppedAspect));
+                } else {
+                  M = gridSize;
+                  N = Math.max(1, Math.round(gridSize * croppedAspect));
+                }
+                console.log(`自动裁剪：原图 ${img.width}×${img.height} → 主体区域 ${srcW}×${srcH}，网格 ${N}×${M}`);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('自动裁剪失败，使用原图:', e);
+        }
+
+        // 将（裁剪后的）原图等比缩放到标准化 canvas（每格约 20px）
         const CELL_PX = 20;
         const canvasW = N * CELL_PX;
         const canvasH = M * CELL_PX;
@@ -2245,12 +2675,19 @@ async function processImageToPattern(
           return;
         }
 
-        // 使用高质量缩放，减少插值引入的杂色
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(img, 0, 0, img.width, img.height, 0, 0, canvasW, canvasH);
+        // 处理策略（基于图片来源，不再按 gridSize 二分）：
+        // - 参考图（JPEG/上传图有压缩噪点）：始终平滑 + Average，无论 gridSize
+        // - AI 生成图：依赖 useAverageMode 参数；小尺寸下也倾向用 Average
+        const isSmallGridSize = gridSize <= 60;
+        const isReferenceImage = options?.isReferenceImage === true;
+        const shouldSmooth = isReferenceImage || isSmallGridSize || (options?.useAverageMode !== false);
+        ctx.imageSmoothingEnabled = shouldSmooth;
+        if (shouldSmooth) {
+          ctx.imageSmoothingQuality = 'high';
+        }
+        ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, canvasW, canvasH);
 
-        // 参考图/上传图用主导色模式（保留原色不混合），AI生成图用平均色模式（更平滑）
-        const useAverage = options?.useAverageMode !== false;
+        const useAverage = isReferenceImage || isSmallGridSize || (options?.useAverageMode !== false);
         const mode = useAverage ? PixelationMode.Average : PixelationMode.Dominant;
         const t1FallbackColor = palette.find(p => p.hex.toUpperCase() === '#FFFFFF') || palette[0];
         let mappedData = calculatePixelGrid(
@@ -2312,64 +2749,57 @@ async function processImageToPattern(
             }
           }
 
-          // 2. 基于连通区域大小的背景移除
-          // 核心思路：找到所有与边界相连的同色（背景色）连通区域，
-          // 只有"足够大"的才标记为背景，小块白色保留为主体的一部分。
-          const BG_DIST_THRESHOLD = 3600; // RGB 各差 ~35 以内
-          const totalCells = N * M;
-          // 背景区域至少占总格数 10% 才算真正的背景（防止小块白色被误判）
-          const MIN_BG_RATIO = 0.10;
+          // 2. 背景移除：颜色标记 + 最大连通块（不用 flood fill，避免渗入主体）
+          // 思路：直接按颜色标记所有接近背景色的格子为 external，
+          //       然后保留剩余格子中的最大连通块（=主体），其余小块也标为 external。
+          //       这样即使轮廓线在采样中模糊了，也不会出现背景"穿过"轮廓的问题。
+          // 参考图用更宽松的阈值（JPEG 压缩会引入颜色漂移），小尺寸也用宽松阈值
+          const BG_DIST_THRESHOLD = isReferenceImage ? 3600 : (isSmallGridSize ? 2500 : 3600);
 
           if (backgroundColor) {
             const isBgColor = (hex: string) =>
               hex.toUpperCase() === backgroundColor!.toUpperCase() ||
               hexColorDistanceSq(hex, backgroundColor!) < BG_DIST_THRESHOLD;
 
-            // 从边界出发，找到所有与边界连通的背景色格子
-            const visited = Array(M).fill(null).map(() => Array(N).fill(false));
-            const borderConnected: { r: number; c: number }[] = [];
-            const stack: { r: number; c: number }[] = [];
-            for (let i = 0; i < N; i++) {
-              if (mappedData[0]?.[i]?.color && isBgColor(mappedData[0][i].color)) stack.push({ r: 0, c: i });
-              if (M > 1 && mappedData[M - 1]?.[i]?.color && isBgColor(mappedData[M - 1][i].color)) stack.push({ r: M - 1, c: i });
-            }
+            // Step A: 按颜色标记所有接近背景色的格子
+            let bgMarkedCount = 0;
             for (let j = 0; j < M; j++) {
-              if (mappedData[j]?.[0]?.color && isBgColor(mappedData[j][0].color)) stack.push({ r: j, c: 0 });
-              if (N > 1 && mappedData[j]?.[N - 1]?.color && isBgColor(mappedData[j][N - 1].color)) stack.push({ r: j, c: N - 1 });
-            }
-            while (stack.length > 0) {
-              const { r, c } = stack.pop()!;
-              if (r < 0 || r >= M || c < 0 || c >= N || visited[r][c]) continue;
-              const cell = mappedData[r]?.[c];
-              if (!cell?.color || cell.isExternal) { visited[r][c] = true; continue; }
-              if (!isBgColor(cell.color)) continue;
-              visited[r][c] = true;
-              borderConnected.push({ r, c });
-              stack.push({ r: r - 1, c }, { r: r + 1, c }, { r, c: c - 1 }, { r, c: c + 1 });
-            }
-
-            // 只有边界连通区域足够大（>10% 总格数）才标记为背景
-            if (borderConnected.length > totalCells * MIN_BG_RATIO) {
-              for (const { r, c } of borderConnected) {
-                mappedData[r][c] = { ...transparentColorData };
+              for (let i = 0; i < N; i++) {
+                const cell = mappedData[j]?.[i];
+                if (cell?.color && !cell.isExternal && isBgColor(cell.color)) {
+                  mappedData[j][i] = { ...transparentColorData };
+                  bgMarkedCount++;
+                }
               }
-              console.log(`背景移除：标记 ${borderConnected.length}/${totalCells} 格为背景`);
-            } else {
-              console.log(`背景区域太小 (${borderConnected.length}/${totalCells})，跳过背景移除`);
             }
+            console.log(`背景颜色标记：移除了 ${bgMarkedCount} 个背景色格子`);
+
+            // Step B: 保留最大连通块（8 连通），其余小块也标为 external
+            mappedData = removeIsolatedPixels(mappedData, N, M);
           }
 
-          // 3. 去掉孤立豆子（8 连通），只保留与主体连通的区域
-          mappedData = removeIsolatedPixels(mappedData, N, M);
-          // 4. 边界密封：只修复孤立的（非大片连通的）边缘白色块
-          mappedData = sealBoundaryWhiteBlocks(mappedData, N, M);
+          // 3. 边界密封：修复边缘残留的孤立异常色块
+          mappedData = sealBoundaryWhiteBlocks(mappedData, N, M, backgroundColor);
         } else {
           // AI随机生成的图纸：标记背景为 external（不填色）
           mappedData = markBackgroundAsExternal(mappedData, N, M);
           // 边缘密封：去掉孤立豆子，只保留与主体连通的区域
           mappedData = removeIsolatedPixels(mappedData, N, M);
-          // 边界密封：修复主体边缘突兀的白色/浅色块
+          // 边界密封
           mappedData = sealBoundaryWhiteBlocks(mappedData, N, M);
+        }
+
+        // 颜色合并（在背景移除之后执行，避免背景高频色干扰轮廓线判断）
+        // 小尺寸用更宽松的阈值（噪点更严重），大尺寸用更紧的阈值（保留细节）
+        // 合并阈值按 RGB 欧氏距离：阈值 N 意味着每通道差 ≤ N/√3 的颜色会被合并
+        // - 参考图 (JPEG 噪点范围 ±5-10)：阈值 22，每通道差 ~13，清理噪点但保留细节
+        // - 小尺寸 AI 图：阈值 25，稍宽松
+        // - 大尺寸 AI 图：阈值 20，保留最多细节
+        const mergeThreshold = isReferenceImage ? 22 : (isSmallGridSize ? 25 : 20);
+        const mergeResult = mergeSimilarColors(mappedData, { N, M }, palette, mergeThreshold);
+        mappedData = mergeResult.newPixelData;
+        if (mergeResult.mergedCount > 0) {
+          console.log(`颜色合并：合并了 ${mergeResult.mergedCount} 种相似颜色（阈值=${mergeThreshold}）`);
         }
 
         // 统计颜色
